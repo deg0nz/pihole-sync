@@ -33,7 +33,7 @@ enum Commands {
         once: bool,
     },
 
-    /// Aquire an app password for a PiHole instance
+    /// Acquire an app password for a PiHole instance
     AppPassword,
 
     #[command(subcommand)]
@@ -134,7 +134,7 @@ async fn run_sync(config_path: &str, run_once: bool) -> Result<()> {
     }
 }
 
-async fn aquire_app_password(config_path: &str) -> Result<()> {
+async fn acquire_app_password(config_path: &str) -> Result<()> {
     let config = Config::load(config_path)?;
     let mut instances_list: Vec<Instance> = Vec::new();
 
@@ -213,7 +213,7 @@ async fn main() -> Result<()> {
             }
 
             Commands::AppPassword => {
-                aquire_app_password(config_path).await?;
+                acquire_app_password(config_path).await?;
             }
 
             Commands::Instances(instances_cmd) => match instances_cmd {
