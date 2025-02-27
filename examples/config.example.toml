@@ -1,0 +1,23 @@
+[sync]
+interval = 30  # in minutes
+cache_location = "/path/to/cache"
+
+[main]
+host = "pihole-main.local"
+schema = "http"
+port = 80
+api_key = "your-main-api-key"
+
+[[secondary]]
+host = "pihole-secondary-1.local"
+schema = "http"
+port = 80
+api_key = "secondary-api-key"
+update_gravity = true
+
+[[secondary]]
+host = "pihole-secondary-2.local"
+schema = "http"
+port = 80
+api_key = "another-api-key"
+update_gravity = false
