@@ -14,7 +14,7 @@ use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
 #[command(name = "pihole-sync")]
-#[command(about = "Syncs PiHole v6 instances using REST API", long_about = None)]
+#[command(about = "Syncs Pi-hole v6 instances using REST API", long_about = None)]
 struct Cli {
     /// Path to the configuration file
     #[arg(short, long, default_value = "/etc/pihole-sync/config.toml")]
@@ -33,7 +33,7 @@ enum Commands {
         once: bool,
     },
 
-    /// Acquire an app password for a PiHole instance
+    /// Acquire an app password for a Pi-hole instance
     AppPassword,
 
     #[command(subcommand)]
@@ -41,7 +41,7 @@ enum Commands {
 }
 
 #[derive(Subcommand)]
-/// Manage PiHole instances
+/// Manage Pi-hole instances
 enum Instances {
     /// List all configured Pi-hole instances
     List,
@@ -157,7 +157,7 @@ async fn acquire_app_password(config_path: &str) -> Result<()> {
 
     let password = Password::with_theme(&ColorfulTheme::default())
         .with_prompt(format!(
-            "Please enter your PiHole webinterface password for {}",
+            "Please enter your Pi-hole webinterface password for {}",
             instances_list[selection].host
         ))
         .interact()
@@ -175,7 +175,7 @@ async fn acquire_app_password(config_path: &str) -> Result<()> {
         instances_list[selection].host
     );
     println!("Password (add to pihole-sync config): {}", app_pw.password);
-    println!("Hash (add to PiHole): {}", app_pw.hash);
+    println!("Hash (add to Pi-hole): {}", app_pw.hash);
     println!("");
     println!("-----");
     println!("Hint:");
@@ -184,9 +184,9 @@ async fn acquire_app_password(config_path: &str) -> Result<()> {
         instances_list[selection].host
     );
     println!(
-        "You need to add the hash to webserver.api.app_password configuration in the PiHole web interface."
+        "You need to add the hash to webserver.api.app_password configuration in the Pi-hole web interface."
     );
-    println!("Refer to PiHole API documentation for more information: https://ftl.pi-hole.net/master/docs/#get-/auth/app");
+    println!("Refer to Pi-hole API documentation for more information: https://ftl.pi-hole.net/master/docs/#get-/auth/app");
 
     Ok(())
 }
