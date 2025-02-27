@@ -186,7 +186,7 @@ async fn acquire_app_password(config_path: &str) -> Result<()> {
     println!(
         "You need to add the hash to webserver.api.app_password configuration in the PiHole web interface."
     );
-    println!("Refer to PiHole API documentation for more information: https://pihole.com/api/docs/#get-/auth/app");
+    println!("Refer to PiHole API documentation for more information: https://ftl.pi-hole.net/master/docs/#get-/auth/app");
 
     Ok(())
 }

@@ -47,8 +47,6 @@ pub struct PiHoleClient {
 
 const X_FTL_SID_HEADER: &str = "sid";
 
-// TODO: https://docs.pi-hole.net/api/auth/
-// Get SID, then send via X-FTL-SID header
 impl PiHoleClient {
     pub fn new(schema: &str, host: &str, port: u16, api_key: &str) -> Self {
         let base_url = format!("{}://{}:{}/api", schema, host, port);
