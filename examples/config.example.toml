@@ -1,13 +1,17 @@
 [sync]
+# The interval at which the sync should be performed
 interval = 30  # in minutes
+# Cache location for storing the downloaded sync data (Pi-hole teleporter ZIP)
 cache_location = "/path/to/cache"
 
+# The main instance to sync from
 [main]
 host = "pihole-main.local"
-schema = "http"
-port = 80
+schema = "https"
+port = 443
 api_key = "your-main-api-key"
 
+# List of instances to sync to
 [[secondary]]
 host = "pihole-secondary-1.local"
 schema = "http"
