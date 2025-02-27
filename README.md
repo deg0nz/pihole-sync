@@ -1,6 +1,7 @@
-# pihole-sync
+# `pihole-sync` (for Pi-hole v6)
 
-A (currently) quick and dirty utility to sync your Pi-hole v6 configuration to multiple Pi-hole instances.
+A (currently) quick and dirty utility to sync your *Pi-hole v6* configuration to multiple Pi-hole instances.
+
 The sync goes one-to-many. One main instance is specified and it's configuration is distributed to all other (secondary) instances.
 
 ## Features
