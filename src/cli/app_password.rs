@@ -59,7 +59,7 @@ pub async fn acquire_app_password(config_path: &str) -> Result<()> {
         instances_list[selection].host
     );
     println!(
-        "You need to add the hash to webserver.api.app_password configuration in the Pi-hole web interface."
+        "You need to add the hash to Settings > Webserver and API > webserver.api.app_pwhash in the Pi-hole web interface."
     );
     println!("Refer to Pi-hole API documentation for more information: https://ftl.pi-hole.net/master/docs/#get-/auth/app");
 
