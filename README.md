@@ -27,7 +27,7 @@ cargo build --release
 
 > Note: The default config location is `/etc/pihole-sync/config.toml`, you need to specify `--config /path/to/config.toml` via CLI, if you don't use the default path.
 
-- Configure your main and secondary instances in `config.toml`. (Please [refer to example config](./examples/config.example.toml))
+- Configure your main and secondary instances in `config.toml`. (Please [refer to example config](./config-examples/config.example.toml))
   - Leave the password free for now. You can generate one via the CLI command `pihole-sync app-password` (add `--config /path/to/config.toml` if you don't use the default path ;))
   - Add the printed **password hash** to your respective Pi-hole instance under Settings > Webserver and API > webserver.api.app_pwhash  (Refer to Pi-hole API documentation for more information: https://ftl.pi-hole.net/master/docs/#get-/auth/app)
   - Add the printed **app password** to the config.toml
