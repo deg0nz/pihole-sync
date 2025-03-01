@@ -1,6 +1,6 @@
 [sync]
 # The interval at which the sync should be performed
-interval = 30  # in minutes
+interval = 120  # in minutes
 # Cache location for storing the downloaded sync data (Pi-hole teleporter ZIP)
 cache_location = "/path/to/cache"
 
