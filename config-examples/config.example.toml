@@ -18,6 +18,20 @@ schema = "http"
 port = 80
 api_key = "secondary-api-key"
 update_gravity = true
+# Sync includes as described in https://ftl.pi-hole.net/master/docs/#post-/teleporter
+# Omitted entries are validated as true
+[secondary.include]
+config = true
+dhcp_leases = true
+[secondary.include.gravity]
+group = true
+adlist = true
+adlist_by_group = true
+domainlist = true
+domainlist_by_group = true
+client = true
+client_by_group = true
+
 
 [[secondary]]
 host = "pihole-secondary-2.local"

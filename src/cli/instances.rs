@@ -50,6 +50,7 @@ pub fn run_instances_cmd(
             }
         }
 
+        // TODO: Make this a dialogue with dialoguer
         Instances::Add {
             host,
             schema,
@@ -63,6 +64,7 @@ pub fn run_instances_cmd(
                 port,
                 api_key,
                 update_gravity: Some(update_gravity),
+                import_options: Some(crate::config::SyncImportOptions::default()),
             });
             config.save(config_path)?;
             info!("Instance added successfully!");

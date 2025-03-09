@@ -8,7 +8,7 @@ use std::{path::Path, sync::Arc};
 use tokio::sync::Mutex;
 use tracing::{debug, info};
 
-use crate::config::Instance;
+use crate::config::{Instance, SyncImportOptions};
 
 #[derive(Debug, Deserialize)]
 struct AuthResponse {
@@ -43,12 +43,19 @@ pub struct PiHoleClient {
     base_url: String,
     api_key: String,
     session_token: Arc<Mutex<Option<String>>>,
+    import_options: Option<SyncImportOptions>,
 }
 
 const X_FTL_SID_HEADER: &str = "sid";
 
 impl PiHoleClient {
-    pub fn new(schema: &str, host: &str, port: u16, api_key: &str) -> Self {
+    pub fn new(
+        schema: &str,
+        host: &str,
+        port: u16,
+        api_key: &str,
+        import_options: Option<SyncImportOptions>,
+    ) -> Self {
         let base_url = format!("{}://{}:{}/api", schema, host, port);
         Self {
             client: ClientBuilder::new()
@@ -58,6 +65,7 @@ impl PiHoleClient {
             base_url,
             api_key: api_key.to_string(),
             session_token: Arc::new(Mutex::new(None)),
+            import_options,
         }
     }
 
@@ -74,6 +82,7 @@ impl PiHoleClient {
             base_url,
             api_key: instance.api_key.to_string(),
             session_token: Arc::new(Mutex::new(None)),
+            import_options: instance.import_options,
         }
     }
 
@@ -220,10 +229,16 @@ impl PiHoleClient {
         let file_bytes = tokio::fs::read(file_path).await?;
         let url = format!("{}/teleporter", self.base_url);
 
-        let part = Part::bytes(file_bytes).file_name("pihole_backup.zip");
-        let form = Form::new()
+        let file_part = Part::bytes(file_bytes).file_name("pihole_backup.zip");
+
+        let mut form = Form::new()
             .text("resourceName", "pihole_backup.zip")
-            .part("file", part);
+            .part("file", file_part);
+
+        if let Some(import_options) = self.import_options.clone() {
+            let import_options_part = Part::text(serde_json::to_string(&import_options)?);
+            form = form.part("import", import_options_part);
+        }
 
         let response = self
             .client
@@ -237,13 +252,12 @@ impl PiHoleClient {
         match response.error_for_status() {
             Ok(res) => {
                 info!("Successfully uploaded backup to {}", self.base_url);
-                info!(
-                    "Processed: {}",
-                    res.json::<BackupUploadProcessedResponse>()
-                        .await?
-                        .files
-                        .join(", ")
-                );
+                info!("Processed:");
+                res.json::<BackupUploadProcessedResponse>()
+                    .await?
+                    .files
+                    .iter()
+                    .for_each(|file| info!("  {}", file));
             }
             Err(err) => {
                 debug!("Error: {}", err.to_string());

@@ -28,13 +28,14 @@ pub async fn run_sync(config_path: &str, run_once: bool) -> Result<()> {
         }
     }
 
-    info!("Starting Pi-hole sync...");
+    info!("Running in sync mode...");
     loop {
         let main_pihole = PiHoleClient::new(
             &config.main.schema,
             &config.main.host,
             config.main.port,
             &config.main.api_key,
+            None,
         );
 
         info!("Downloading backup from main instance...");
@@ -47,6 +48,7 @@ pub async fn run_sync(config_path: &str, run_once: bool) -> Result<()> {
                     &secondary.host,
                     secondary.port,
                     &secondary.api_key,
+                    secondary.import_options.clone(),
                 );
 
                 info!("Uploading backup to {}", secondary.host);
