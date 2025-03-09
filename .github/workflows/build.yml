@@ -1,4 +1,4 @@
-name: Build Rust Release (Alpine)
+name: Build
 
 on:
   release:
@@ -14,22 +14,20 @@ jobs:
           - aarch64-unknown-linux-musl
           - armv7-unknown-linux-musleabihf
 
-    container:
-      image: rust:alpine # Use official Rust Alpine image
-
     steps:
-      - name: Install dependencies
-        run: |
-          apk add --no-cache musl-dev openssl-dev pkgconfig
-
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Add Rust targets
-        run: rustup target add ${{ matrix.target }}
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config
+
+      - name: Install cross
+        run: cargo install cross
 
       - name: Build for ${{ matrix.target }}
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cross build --release --target ${{ matrix.target }}
 
       - name: Rename binary
         run: mv target/${{ matrix.target }}/release/pihole-sync pihole-sync-${{ matrix.target }}
