@@ -1,5 +1,6 @@
-/target
+target/
 cache/
+pihole-backup.zip
 
 my.config.toml
 my.config.yaml
