@@ -1,0 +1,16 @@
+[Unit]
+Description=Pi-hole Configuration Sync Service
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/pihole-sync
+WorkingDirectory=/opt/pihole-sync
+Restart=always
+User=pihole
+Group=pihole
+Environment="RUST_LOG=info"
+StandardOutput=append:/var/log/pihole-sync.log
+StandardError=append:/var/log/pihole-sync.err.log
+
+[Install]
+WantedBy=multi-user.target

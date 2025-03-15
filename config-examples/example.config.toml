@@ -1,0 +1,41 @@
+[sync]
+# The interval at which the sync should be performed
+interval = 120  # in minutes
+# Cache location for storing the downloaded sync data (Pi-hole teleporter ZIP)
+cache_location = "/path/to/cache"
+
+# The main instance to sync from
+[main]
+host = "pihole-main.local"
+schema = "https"
+port = 443
+api_key = "your-main-api-key"
+
+# List of instances to sync to
+[[secondary]]
+host = "pihole-secondary-1.local"
+schema = "http"
+port = 80
+api_key = "secondary-api-key"
+update_gravity = true
+# Sync includes as described in https://ftl.pi-hole.net/master/docs/#post-/teleporter
+# Omitted entries are validated as true
+[secondary.include]
+config = true
+dhcp_leases = true
+[secondary.include.gravity]
+group = true
+adlist = true
+adlist_by_group = true
+domainlist = true
+domainlist_by_group = true
+client = true
+client_by_group = true
+
+
+[[secondary]]
+host = "pihole-secondary-2.local"
+schema = "http"
+port = 80
+api_key = "another-api-key"
+update_gravity = false
