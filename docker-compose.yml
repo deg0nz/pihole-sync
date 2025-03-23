@@ -1,0 +1,22 @@
+version: '3'
+
+services:
+  piholesync:
+    image: ghcr.io/yourusername/piholesync:latest
+    container_name: piholesync
+    restart: unless-stopped
+    volumes:
+      - piholesync-cache:/var/cache/pihole-sync
+      - piholesync-config:/etc/pihole-sync
+    environment:
+      - RUST_LOG=info
+      - MAIN_HOST=main-pihole.example.com
+      - MAIN_SCHEMA=https
+      - MAIN_PORT=443
+      - MAIN_API_KEY=YOUR_MAIN_PIHOLE_APP_PASSWORD
+      - SECONDARY_HOST_1=secondary-pihole-1.example.com
+      - SECONDARY_SCHEMA_1=https
+      - SECONDARY_PORT_1=443
+      - SECONDARY_API_KEY_1=YOUR_SECONDARY_PIHOLE_APP_PASSWORD
+      - SECONDARY_UPDATE_GRAVITY_1=true
+      - SYNC_INTERVAL=60
