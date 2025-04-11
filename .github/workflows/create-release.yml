@@ -1,0 +1,80 @@
+name: Create Release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Wait for all build jobs to complete
+      - name: Wait for x86_64 build
+        uses: lewagon/wait-on-check-action@v1.3.1
+        with:
+          ref: ${{ github.ref }}
+          check-name: "Build - x86_64-unknown-linux-gnu"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          wait-interval: 10
+
+      - name: Wait for arm64 build
+        uses: lewagon/wait-on-check-action@v1.3.1
+        with:
+          ref: ${{ github.ref }}
+          check-name: "Build - aarch64-unknown-linux-gnu"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          wait-interval: 10
+
+      - name: Wait for armv7 build
+        uses: lewagon/wait-on-check-action@v1.3.1
+        with:
+          ref: ${{ github.ref }}
+          check-name: "Build - armv7-unknown-linux-gnueabihf"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          wait-interval: 10
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+
+      - name: Get Docker image tag
+        id: docker_tag
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: Release ${{ github.ref }}
+          body: |
+            ## Docker Image
+            ```
+            ghcr.io/${{ github.repository_owner }}/pihole-sync:${{ steps.docker_tag.outputs.tag }}
+            ```
+
+            You can also use:
+            ```
+            ghcr.io/${{ github.repository_owner }}/pihole-sync:latest
+            ```
+          draft: false
+          prerelease: false
+
+      - name: Upload Release Assets
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            pihole-sync-x86_64-linux.tar.gz/*
+            pihole-sync-arm64-linux.tar.gz/*
+            pihole-sync-armv7-linux.tar.gz/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
