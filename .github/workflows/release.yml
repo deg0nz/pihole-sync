@@ -16,6 +16,7 @@ env:
 jobs:
   create-release:
     runs-on: ubuntu-latest
+    # Only run this job when pushing tags
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     outputs:
       upload_url: ${{ steps.create_release.outputs.upload_url }}
@@ -34,10 +35,7 @@ jobs:
 
   build-release:
     name: Build Release - ${{ matrix.target }}
-    needs: create-release
-    if: |
-      always() &&
-      (needs.create-release.result == 'success' || needs.create-release.result == 'skipped')
+    # Remove the dependency on create-release job
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -89,7 +87,9 @@ jobs:
           tar czvf ../../../${{ matrix.archive-name }} pihole-sync
           cd -
 
+      # Only upload assets when we're creating a release (on tag push)
       - name: Upload Release Asset
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
