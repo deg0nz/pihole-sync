@@ -39,9 +39,6 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           wait-interval: 10
 
-      - name: Download all artifacts
-        uses: actions/download-artifact@v3
-
       - name: Get Docker image tag
         id: docker_tag
         run: |
