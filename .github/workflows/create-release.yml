@@ -68,13 +68,3 @@ jobs:
             ```
           draft: false
           prerelease: false
-
-      - name: Upload Release Assets
-        uses: softprops/action-gh-release@v1
-        with:
-          files: |
-            pihole-sync-x86_64-linux.tar.gz/*
-            pihole-sync-arm64-linux.tar.gz/*
-            pihole-sync-armv7-linux.tar.gz/*
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

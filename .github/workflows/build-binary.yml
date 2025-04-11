@@ -51,9 +51,13 @@ jobs:
           tar czvf ../../../${{ matrix.archive-name }} pihole-sync
           cd -
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v3
+      - name: Upload Release Asset
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          name: ${{ matrix.archive-name }}
-          path: ${{ matrix.archive-name }}
-          retention-days: 1
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ${{ matrix.archive-name }}
+          asset_name: ${{ matrix.archive-name }}
+          asset_content_type: application/gzip
