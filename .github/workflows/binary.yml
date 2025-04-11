@@ -35,7 +35,7 @@ jobs:
           prerelease: false
 
   build-release:
-    name: Build Release - ${{ matrix.target }}
+    name: Build - ${{ matrix.target }}
     # Remove the dependency on create-release job
     runs-on: ubuntu-latest
     strategy:
