@@ -44,10 +44,10 @@ jobs:
             archive-name: pihole-sync-x86_64-linux.tar.gz
           - target: aarch64-unknown-linux-gnu
             archive-name: pihole-sync-arm64-linux.tar.gz
-            cross-pkgs: "gcc-aarch64-linux-gnu pkg-config libssl-dev:arm64"
+            cross-pkgs: "gcc-aarch64-linux-gnu pkg-config libssl-dev"
           - target: armv7-unknown-linux-gnueabihf
             archive-name: pihole-sync-armv7-linux.tar.gz
-            cross-pkgs: "gcc-arm-linux-gnueabihf pkg-config libssl-dev:armhf"
+            cross-pkgs: "gcc-arm-linux-gnueabihf pkg-config libssl-dev"
 
     steps:
       - uses: actions/checkout@v4
@@ -71,7 +71,7 @@ jobs:
           sudo apt-get update
           sudo dpkg --add-architecture arm64
           sudo dpkg --add-architecture armhf
-          sudo apt-get install -y ${{ matrix.cross-pkgs }} libssl3:armhf libssl3:arm64
+          sudo apt-get install -y ${{ matrix.cross-pkgs }}
 
       - name: Build target
         uses: actions-rs/cargo@v1
