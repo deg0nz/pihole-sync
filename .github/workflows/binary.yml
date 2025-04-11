@@ -1,9 +1,10 @@
-name: Release
+name: Binary
 
 on:
   push:
-    tags:
-      - "v*"
+    branches: [main]
+    tags: ["v*.*.*"]
+
   pull_request:
     branches: [main]
 
