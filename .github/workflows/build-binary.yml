@@ -51,13 +51,37 @@ jobs:
           tar czvf ../../../${{ matrix.archive-name }} pihole-sync
           cd -
 
+      # Find the manually created release by tag
+      - name: Find release
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        id: find_release
+        run: |
+          TAG="${{ github.event.inputs.tag }}"
+
+          # Try to find the existing release
+          RELEASE_DATA=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG")
+
+          # Check if release exists
+          if [[ $(echo $RELEASE_DATA | jq -r '.id') != "null" ]]; then
+            UPLOAD_URL=$(echo $RELEASE_DATA | jq -r '.upload_url')
+            # Remove the {?name,label} part
+            UPLOAD_URL=${UPLOAD_URL%\{*\}}
+            echo "upload_url=$UPLOAD_URL" >> $GITHUB_OUTPUT
+            echo "Release found for tag $TAG"
+          else
+            echo "::error::No release found for tag $TAG"
+            exit 1
+          fi
+
+      # Upload the asset to the manually created release
       - name: Upload Release Asset
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          upload_url: ${{ steps.find_release.outputs.upload_url }}
           asset_path: ${{ matrix.archive-name }}
           asset_name: ${{ matrix.archive-name }}
           asset_content_type: application/gzip
