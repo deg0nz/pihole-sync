@@ -1,9 +1,8 @@
 name: Binary
 
 on:
-  push:
-    branches: [main]
-    tags: ["v*.*.*"]
+  release:
+    types: [created]
   pull_request:
     branches: [main]
 
@@ -45,43 +44,42 @@ jobs:
           args: --release --target ${{ matrix.target }}
 
       - name: Package
+        if: github.event_name == 'release'
         shell: bash
         run: |
-          cd target/${{ matrix.target }}/release
-          tar czvf ../../../${{ matrix.archive-name }} pihole-sync
-          cd -
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/pihole-sync dist/
+          cd dist
+          tar -czvf ${{ matrix.archive-name }} pihole-sync
 
-      # Find the manually created release by tag
-      - name: Find release
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-        id: find_release
-        run: |
-          TAG="${GITHUB_REF#refs/tags/}"
+      - name: Upload artifact
+        if: github.event_name == 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: dist/${{ matrix.archive-name }}
 
-          # Try to find the existing release
-          RELEASE_DATA=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            "https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG")
+  upload:
+    name: Upload to GitHub Release
+    if: github.event_name == 'release'
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - x86_64-unknown-linux-gnu
+          - aarch64-unknown-linux-gnu
+          - armv7-unknown-linux-gnueabihf
 
-          # Check if release exists
-          if [[ $(echo $RELEASE_DATA | jq -r '.id') != "null" ]]; then
-            UPLOAD_URL=$(echo $RELEASE_DATA | jq -r '.upload_url')
-            # Remove the {?name,label} part
-            UPLOAD_URL=${UPLOAD_URL%\{*\}}
-            echo "upload_url=$UPLOAD_URL" >> $GITHUB_OUTPUT
-            echo "Release found for tag $TAG"
-          else
-            echo "::error::No release found for tag $TAG"
-            exit 1
-          fi
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
 
-      # Upload the asset to the manually created release
-      - name: Upload Release Asset
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-        uses: actions/upload-release-asset@v1
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ${{ matrix.archive-name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.find_release.outputs.upload_url }}
-          asset_path: ${{ matrix.archive-name }}
-          asset_name: ${{ matrix.archive-name }}
-          asset_content_type: application/gzip
