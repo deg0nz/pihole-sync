@@ -186,6 +186,22 @@ impl PiHoleClient {
     }
 
     /// Sends an authenticated POST request to the Pi-hole API.
+    async fn patch(&self, endpoint: &str, data: Value) -> Result<Response> {
+        self.ensure_authenticated().await?;
+
+        let url = format!("{}{}", self.base_url, endpoint);
+
+        self.client
+            .patch(&url)
+            .json(&data)
+            .header(X_FTL_SID_HEADER, self.get_session_token().await?)
+            .send()
+            .await?
+            .error_for_status()
+            .context(format!("POST request failed: {}", url))
+    }
+
+    /// Sends an authenticated POST request to the Pi-hole API.
     async fn delete(&self, endpoint: &str) -> Result<Response> {
         self.ensure_authenticated().await?;
 
@@ -295,6 +311,19 @@ impl PiHoleClient {
         }
 
         Ok(0)
+    }
+
+    async fn get_config(&self) -> Result<Value> {
+        let response = self.get("/config").await?;
+        let v: Value = response.json().await?;
+
+        // TODO: Remove unwrap, handle None
+        Ok(v.get("config").unwrap().to_owned())
+    }
+
+    async fn patch_config(&self, config: Value) -> Result<()> {
+        self.patch("/config", config).await?;
+        Ok(())
     }
 
     async fn start_session_keepalive(&self, interval_seconds: u64) -> Result<()> {
