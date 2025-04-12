@@ -83,6 +83,6 @@ jobs:
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          files: dist/${{ matrix.archive-name }}
+          files: ${{ matrix.archive-name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
