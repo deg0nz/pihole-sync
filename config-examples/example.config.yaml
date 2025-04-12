@@ -31,6 +31,9 @@ secondary:
         domainlist_by_group: true
         client: true
         client_by_group: true
+      exclude_config_properties:
+        - "dns.hosts"
+        - "webserver.api.pwhash"
 
   - host: "pihole-secondary-2.local"
     schema: "http"
