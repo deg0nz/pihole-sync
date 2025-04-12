@@ -28,6 +28,7 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      ## TODO: Don't tag "latest" on pre-releases!
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v4
