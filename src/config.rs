@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
+use tracing::{debug, warn};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SyncConfig {
@@ -15,11 +16,12 @@ pub struct InstanceConfig {
     pub port: u16,
     pub api_key: String,
     pub update_gravity: Option<bool>,
-    pub import_options: Option<SyncImportOptions>,
+    pub config_excludes: Option<Vec<String>>,
+    pub import_options: Option<TeleporterImportOptions>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct SyncImportOptions {
+pub struct TeleporterImportOptions {
     #[serde(default = "default_true")]
     pub config: bool,
     #[serde(default = "default_true")]
@@ -57,7 +59,7 @@ fn default_true() -> bool {
     true
 }
 
-impl Default for SyncImportOptions {
+impl Default for TeleporterImportOptions {
     fn default() -> Self {
         Self {
             config: true,
@@ -94,10 +96,11 @@ impl Config {
             .unwrap_or("");
 
         // Parse based on file extension
-        let config: Config = match extension.to_lowercase().as_str() {
+        let mut config: Config = match extension.to_lowercase().as_str() {
             "yaml" | "yml" => serde_yaml::from_str(&content)
                 .with_context(|| "Failed to parse config file as YAML")?,
             "toml" => {
+                warn!("DEPRECATION WARNING: TOML configs are deprecated and support for them will be removed soon. Please migrate to YAML config");
                 toml::from_str(&content).with_context(|| "Failed to parse config file as TOML")?
             }
             _ => {
@@ -106,6 +109,16 @@ impl Config {
                 ))
             }
         };
+
+        // Disable teleporter sync of config, when excludes are found
+        for secondary in &mut config.secondary {
+            if secondary.config_excludes.is_some() {
+                if let Some(import_options) = &mut secondary.import_options {
+                    debug!("Found exclude_config_properies. Disabling Teleporter config sync.");
+                    import_options.config = false;
+                }
+            }
+        }
 
         Ok(config)
     }

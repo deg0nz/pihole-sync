@@ -313,7 +313,7 @@ impl PiHoleClient {
         Ok(0)
     }
 
-    async fn get_config(&self) -> Result<Value> {
+    pub async fn get_config(&self) -> Result<Value> {
         let response = self.get("/config").await?;
         let v: Value = response.json().await?;
 
@@ -321,7 +321,7 @@ impl PiHoleClient {
         Ok(v.get("config").unwrap().to_owned())
     }
 
-    async fn patch_config(&self, config: Value) -> Result<()> {
+    pub async fn patch_config(&self, config: Value) -> Result<()> {
         self.patch("/config", config).await?;
         Ok(())
     }
@@ -382,5 +382,9 @@ impl PiHoleClient {
         }
 
         Ok(())
+    }
+
+    pub fn has_config_filters(&self) -> bool {
+        self.config.config_excludes.is_some()
     }
 }

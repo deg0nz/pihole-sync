@@ -3,8 +3,9 @@ use std::{fs, path::Path, time::Duration};
 use tokio::time::sleep;
 use tracing::{error, info};
 
-use crate::{config::Config, pihole_client::PiHoleClient};
-use anyhow::Result;
+use crate::pihole::client::PiHoleClient;
+use crate::{config::Config, pihole::config_filter::ConfigFilter};
+use anyhow::{Error, Result};
 
 pub async fn run_sync(config_path: &str, run_once: bool) -> Result<()> {
     // Load config
@@ -71,6 +72,15 @@ pub async fn run_sync(config_path: &str, run_once: bool) -> Result<()> {
                         );
                     }
                 }
+
+                if secondary_pihole.has_config_filters() {
+                    info!("Syncing config");
+                    if let Err(e) =
+                        sync_pihole_config_filtered(&main_pihole, &secondary_pihole).await
+                    {
+                        error!("{}", e);
+                    }
+                }
             }
         }
 
@@ -90,4 +100,20 @@ pub async fn run_sync(config_path: &str, run_once: bool) -> Result<()> {
 
         sleep(sync_interval).await;
     }
+}
+
+async fn sync_pihole_config_filtered(
+    main: &PiHoleClient,
+    secondary: &PiHoleClient,
+) -> Result<(), Error> {
+    let config = main.get_config().await?;
+
+    if let Some(excludes) = secondary.config.config_excludes.clone() {
+        let filter = ConfigFilter::new(&excludes);
+        let filtered_config = filter.filter_json(config.clone());
+
+        dbg!(filtered_config);
+    }
+
+    Ok(())
 }

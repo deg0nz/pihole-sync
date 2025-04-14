@@ -18,9 +18,16 @@ secondary:
     port: 80
     api_key: "secondary-api-key"
     update_gravity: true
+    # Syncs all config options except the listed paths
+    # The filter is hierarchy based, so "dns" will omit the whole dns object,
+    # "webserver.api.pwhash" will sync everything from webserver.api except pwhash and so on
+    config_excludes:
+      - "dns.hosts"
+      - "webserver.api.pwhash"
     # Sync includes as described in https://ftl.pi-hole.net/master/docs/#post-/teleporter
     # Omitted entries are validated as true
     import_options:
+      # This syncs the *COMPLETE* config, it defaults to false, if exclude_config_properties is present
       config: true
       dhcp_leases: true
       gravity:
@@ -31,9 +38,6 @@ secondary:
         domainlist_by_group: true
         client: true
         client_by_group: true
-      exclude_config_properties:
-        - "dns.hosts"
-        - "webserver.api.pwhash"
 
   - host: "pihole-secondary-2.local"
     schema: "http"

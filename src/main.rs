@@ -1,6 +1,6 @@
 mod cli;
 mod config;
-mod pihole_client;
+mod pihole;
 
 use anyhow::Result;
 use cli::Cli;
