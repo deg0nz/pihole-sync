@@ -66,7 +66,7 @@ impl PiHoleClient {
 
     /// **Authenticate and get session token**
     async fn authenticate(&self, password: Option<String>) -> Result<()> {
-        debug!("Authenticating");
+        debug!("[{}] Authenticating", self.config.host);
         let auth_url = format!("{}/auth", self.base_url);
         let body = serde_json::json!({ "password": if let Some(pw) = password { pw } else { self.config.api_key.clone() } });
 
@@ -79,12 +79,12 @@ impl PiHoleClient {
             .json::<AuthResponse>()
             .await?;
 
-        debug!("Auth Response: {:?}", response);
+        debug!("[{}] Auth Response: {:?}", self.config.host, response);
 
         if let Some(token) = response.session.sid {
             self.set_token(token.clone()).await?;
         } else {
-            anyhow::bail!("Failed to authenticate: No session ID received. This probably means that the API password is invalid.");
+            anyhow::bail!("[{}] Failed to authenticate: No session ID received. This probably means that the API password is invalid.", self.config.host);
         }
         Ok(())
     }
@@ -198,7 +198,7 @@ impl PiHoleClient {
             .send()
             .await?
             .error_for_status()
-            .context(format!("POST request failed: {}", url))
+            .context(format!("PATCH request failed: {}", url))
     }
 
     /// Sends an authenticated POST request to the Pi-hole API.
@@ -228,7 +228,10 @@ impl PiHoleClient {
             .await
             .context("Failed to write backup file")?;
 
-        info!("Successfully downloaded backup archive");
+        info!(
+            "[{}] Successfully downloaded backup archive",
+            self.config.host
+        );
         Ok(())
     }
 
@@ -245,9 +248,9 @@ impl PiHoleClient {
             .text("resourceName", "pihole_backup.zip")
             .part("file", file_part);
 
-        if let Some(import_options) = self.config.import_options.clone() {
-            let import_options_part = Part::text(serde_json::to_string(&import_options)?);
-            form = form.part("import", import_options_part);
+        if let Some(teleporter_options) = self.config.teleporter_options.clone() {
+            let teleporter_options_part = Part::text(serde_json::to_string(&teleporter_options)?);
+            form = form.part("import", teleporter_options_part);
         }
 
         let response = self
@@ -261,7 +264,7 @@ impl PiHoleClient {
 
         match response.error_for_status() {
             Ok(res) => {
-                info!("Successfully uploaded backup to {}", self.base_url);
+                info!("[{}] Successfully uploaded backup", self.config.host);
                 info!("Processed:");
                 res.json::<BackupUploadProcessedResponse>()
                     .await?
@@ -281,7 +284,7 @@ impl PiHoleClient {
     /// Triggers a gravity update.
     pub async fn trigger_gravity_update(&self) -> Result<()> {
         self.post("/action/gravity").await?;
-        info!("Triggered gravity update on {}", self.base_url);
+        info!("[{}] Triggered gravity update", self.config.host);
         Ok(())
     }
 
@@ -292,7 +295,7 @@ impl PiHoleClient {
 
     pub async fn logout(&self) -> Result<()> {
         self.delete("/auth").await?;
-        info!("Logged out from {}", self.base_url);
+        info!("[{}] Logged out", self.config.host);
         Ok(())
     }
 
@@ -369,12 +372,12 @@ impl PiHoleClient {
         let keepalive_interval = sync_interval_seconds - 30;
 
         if session_timeout == 0 {
-            warn!("Couldn't retrieve session timeout correctly. Not starting keepalive interval.");
+            warn!("[{}] Couldn't retrieve session timeout correctly. Not starting keepalive interval.", self.config.host);
             return Ok(());
         }
 
         if session_timeout < sync_interval_seconds {
-            info!("{}: Sync interval is greater than PiHole's session timeout. Starting session keepalive interval.", self.config.host);
+            info!("[{}] Sync interval is greater than PiHole's session timeout. Starting session keepalive interval.", self.config.host);
             debug!("Sync interval: {} seconds", sync_interval_seconds);
             debug!("Session Timeout: {} seconds", session_timeout);
             debug!("Session Keepalive interval: {} seconds", keepalive_interval);
@@ -385,6 +388,6 @@ impl PiHoleClient {
     }
 
     pub fn has_config_filters(&self) -> bool {
-        self.config.config_excludes.is_some()
+        self.config.config_sync.is_some()
     }
 }

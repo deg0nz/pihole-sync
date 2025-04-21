@@ -1,9 +1,10 @@
 use std::{fs, path::Path, time::Duration};
 
 use tokio::time::sleep;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use crate::pihole::client::PiHoleClient;
+use crate::pihole::config_filter::FilterMode;
 use crate::{config::Config, pihole::config_filter::ConfigFilter};
 use anyhow::{Error, Result};
 
@@ -53,10 +54,13 @@ pub async fn run_sync(config_path: &str, run_once: bool) -> Result<()> {
     loop {
         info!("Downloading backup from main instance...");
         if let Err(e) = main_pihole.download_backup(&backup_path).await {
-            error!("Failed to download backup: {:?}", e);
+            error!(
+                "[{}] Failed to download backup: {:?}",
+                main_pihole.config.host, e
+            );
         } else {
             for secondary_pihole in &secondary_piholes {
-                info!("Uploading backup to {}", secondary_pihole.config.host);
+                info!("[{}] Uploading backup", secondary_pihole.config.host);
                 if let Err(e) = secondary_pihole.upload_backup(&backup_path).await {
                     error!(
                         "Failed to upload backup to {}: {:?}",
@@ -64,7 +68,7 @@ pub async fn run_sync(config_path: &str, run_once: bool) -> Result<()> {
                     );
                     continue;
                 } else if secondary_pihole.config.update_gravity.unwrap_or(false) {
-                    info!("Updating gravity on {}", secondary_pihole.config.host);
+                    info!("[{}] Updating gravity", secondary_pihole.config.host);
                     if let Err(e) = secondary_pihole.trigger_gravity_update().await {
                         error!(
                             "Failed to update gravity on {}: {:?}",
@@ -74,7 +78,7 @@ pub async fn run_sync(config_path: &str, run_once: bool) -> Result<()> {
                 }
 
                 if secondary_pihole.has_config_filters() {
-                    info!("Syncing config");
+                    info!("[{}] Syncing config", secondary_pihole.config.host);
                     if let Err(e) =
                         sync_pihole_config_filtered(&main_pihole, &secondary_pihole).await
                     {
@@ -108,11 +112,20 @@ async fn sync_pihole_config_filtered(
 ) -> Result<(), Error> {
     let config = main.get_config().await?;
 
-    if let Some(excludes) = secondary.config.config_excludes.clone() {
-        let filter = ConfigFilter::new(&excludes);
+    if let Some(config_sync) = secondary.config.config_sync.clone() {
+        let mut filter_mode = FilterMode::OptIn;
+
+        if config_sync.exclude {
+            filter_mode = FilterMode::OptOut;
+        }
+
+        let filter = ConfigFilter::new(&config_sync.filter_keys, filter_mode);
         let filtered_config = filter.filter_json(config.clone());
 
-        dbg!(filtered_config);
+        dbg!(&filtered_config);
+
+        let res = secondary.patch_config(filtered_config).await?;
+        dbg!(res)
     }
 
     Ok(())

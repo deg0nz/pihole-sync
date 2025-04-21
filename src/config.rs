@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
-use tracing::{debug, warn};
+use tracing::{info, warn};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SyncConfig {
@@ -16,8 +16,16 @@ pub struct InstanceConfig {
     pub port: u16,
     pub api_key: String,
     pub update_gravity: Option<bool>,
-    pub config_excludes: Option<Vec<String>>,
+    pub config_sync: Option<ConfigSyncOptions>,
     pub import_options: Option<TeleporterImportOptions>,
+    pub teleporter_options: Option<TeleporterImportOptions>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ConfigSyncOptions {
+    #[serde(default = "default_false")]
+    pub exclude: bool,
+    pub filter_keys: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -57,6 +65,10 @@ pub struct Config {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_false() -> bool {
+    false
 }
 
 impl Default for TeleporterImportOptions {
@@ -100,7 +112,7 @@ impl Config {
             "yaml" | "yml" => serde_yaml::from_str(&content)
                 .with_context(|| "Failed to parse config file as YAML")?,
             "toml" => {
-                warn!("DEPRECATION WARNING: TOML configs are deprecated and support for them will be removed soon. Please migrate to YAML config");
+                warn!("DEPRECATION WARNING: TOML configs are deprecated and support for them will be removed in 1.0.0. Please migrate to YAML config");
                 toml::from_str(&content).with_context(|| "Failed to parse config file as TOML")?
             }
             _ => {
@@ -110,13 +122,29 @@ impl Config {
             }
         };
 
-        // Disable teleporter sync of config, when excludes are found
         for secondary in &mut config.secondary {
-            if secondary.config_excludes.is_some() {
-                if let Some(import_options) = &mut secondary.import_options {
-                    debug!("Found exclude_config_properies. Disabling Teleporter config sync.");
+            if let Some(import_options) = &mut secondary.import_options {
+                warn!("[{}] DEPRECATION WARNING: import_options has been renamed to teleporter_options, this field will be removed in 1.0.0. Please update your config file.", secondary.host);
+
+                // Insert import_options to teleporter_options
+                if secondary.teleporter_options.is_none() {
+                    secondary.teleporter_options = Some(import_options.clone());
+                } else {
+                    warn!("[{}] Found import_options _and_ teleporter_options. Ignoring import_options.", secondary.host)
+                }
+
+                // Disable teleporter config sync if config_sync is defined
+                if secondary.config_sync.is_some() {
+                    info!(
+                        "[{}] Found config_sync options, disabling config sync via teleporter",
+                        &secondary.host
+                    );
                     import_options.config = false;
                 }
+            }
+
+            if let Some(teleporter_options) = &mut secondary.teleporter_options {
+                teleporter_options.config = false;
             }
         }
 

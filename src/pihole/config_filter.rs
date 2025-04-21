@@ -1,22 +1,31 @@
 use serde_json::{Map, Value};
 use std::collections::HashSet;
 
+pub enum FilterMode {
+    OptIn,  // Only include specified paths
+    OptOut, // Include everything except specified paths
+}
+
 pub struct ConfigFilter {
-    excluded_paths: HashSet<String>,
+    paths: HashSet<String>,
+    mode: FilterMode,
 }
 
 impl ConfigFilter {
-    pub fn new(exclude_paths: &[String]) -> Self {
-        let excluded_paths: HashSet<String> = exclude_paths.iter().cloned().collect();
-        Self { excluded_paths }
+    pub fn new(paths: &[String], mode: FilterMode) -> Self {
+        let paths: HashSet<String> = paths.iter().cloned().collect();
+        Self { paths, mode }
     }
 
     pub fn filter_json(&self, json: Value) -> Value {
-        if self.excluded_paths.is_empty() {
-            return json;
+        if self.paths.is_empty() {
+            match self.mode {
+                FilterMode::OptIn => Value::Object(Map::new()), // Empty result if nothing opted in
+                FilterMode::OptOut => json, // Everything included if nothing opted out
+            }
+        } else {
+            self.filter_value(json, String::new())
         }
-
-        self.filter_value(json, String::new())
     }
 
     fn filter_value(&self, value: Value, current_path: String) -> Value {
@@ -33,23 +42,56 @@ impl ConfigFilter {
         }
     }
 
-    fn is_path_excluded(&self, path: &str) -> bool {
-        // Check if the exact path is excluded
-        if self.excluded_paths.contains(path) {
-            return true;
-        }
+    fn should_include_path(&self, path: &str) -> bool {
+        match self.mode {
+            FilterMode::OptIn => {
+                // Check if the exact path is included
+                if self.paths.contains(path) {
+                    return true;
+                }
 
-        // Check if any parent path is excluded (hierarchical exclusion)
-        let mut parts: Vec<&str> = path.split('.').collect();
-        while parts.len() > 1 {
-            parts.pop();
-            let parent_path = parts.join(".");
-            if self.excluded_paths.contains(&parent_path) {
-                return true;
+                // Check if any parent path is included
+                let base_path = path.split('[').next().unwrap(); // Get path without array index
+                let mut parts: Vec<&str> = base_path.split('.').collect();
+
+                // Check the exact parent path (for array elements)
+                if self.paths.contains(&parts.join(".")) {
+                    return true;
+                }
+
+                while parts.len() > 1 {
+                    parts.pop();
+                    let parent_path = parts.join(".");
+                    if self.paths.contains(&parent_path) {
+                        return true;
+                    }
+                }
+
+                // Check if this is a parent of any included path
+                self.paths.iter().any(|included_path| {
+                    included_path.starts_with(base_path)
+                        && (included_path.len() == base_path.len()
+                            || included_path.chars().nth(base_path.len()) == Some('.'))
+                })
+            }
+            FilterMode::OptOut => {
+                // Check if the exact path is excluded
+                if self.paths.contains(path) {
+                    return false;
+                }
+
+                // Check if any parent path is excluded (hierarchical exclusion)
+                let mut parts: Vec<&str> = path.split('.').collect();
+                while parts.len() > 1 {
+                    parts.pop();
+                    let parent_path = parts.join(".");
+                    if self.paths.contains(&parent_path) {
+                        return false;
+                    }
+                }
+                true
             }
         }
-
-        false
     }
 
     fn filter_object(&self, obj: Map<String, Value>, path: String) -> Map<String, Value> {
@@ -62,12 +104,20 @@ impl ConfigFilter {
                 format!("{}.{}", path, key)
             };
 
-            if self.is_path_excluded(&current_path) {
-                // Skip this property as it's in the exclusion list or its parent is excluded
-                continue;
-            }
+            let should_include = self.should_include_path(&current_path);
 
-            filtered_obj.insert(key, self.filter_value(value, current_path));
+            match self.mode {
+                FilterMode::OptIn => {
+                    if should_include {
+                        filtered_obj.insert(key, self.filter_value(value, current_path));
+                    }
+                }
+                FilterMode::OptOut => {
+                    if should_include {
+                        filtered_obj.insert(key, self.filter_value(value, current_path));
+                    }
+                }
+            }
         }
 
         filtered_obj
@@ -79,13 +129,20 @@ impl ConfigFilter {
         for (idx, value) in arr.into_iter().enumerate() {
             let current_path = format!("{}[{}]", path, idx);
 
-            if self.is_path_excluded(&current_path) {
-                // Skip this array element completely
-                continue;
-            }
+            let should_include = self.should_include_path(&current_path);
 
-            // Process the array element recursively
-            filtered_arr.push(self.filter_value(value, current_path));
+            match self.mode {
+                FilterMode::OptIn => {
+                    if should_include {
+                        filtered_arr.push(self.filter_value(value, current_path));
+                    }
+                }
+                FilterMode::OptOut => {
+                    if should_include {
+                        filtered_arr.push(self.filter_value(value, current_path));
+                    }
+                }
+            }
         }
 
         filtered_arr
