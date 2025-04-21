@@ -1,0 +1,64 @@
+sync:
+  # Interval in minutes between sync operations
+  interval: 60
+  # Cache location for temporary files (inside the container)
+  cache_location: /var/cache/pihole-sync
+
+# Main Pi-hole instance (source)
+main:
+  host: main-pihole.example.com
+  schema: https
+  port: 443
+  api_key: YOUR_MAIN_PIHOLE_APP_PASSWORD
+
+# Secondary Pi-hole instances (targets)
+secondary:
+  - host: secondary-pihole-1.example.com
+    schema: https
+    port: 443
+    api_key: YOUR_SECONDARY_PIHOLE_APP_PASSWORD
+    update_gravity: true
+    # Optional, if present the config will be synced via the API instead of teleporter
+    config_sync:
+      # If false: Listed filter keys will be handled as opt-in, so only the listed keys will be synced recursively (default)
+      # If true: Listed filter keys will be handled as opt-out, so all keys except the listed ones will be synced recursively
+      exclude: false
+      # List of keys/paths to include or exclude
+      # All children of a given key will be included/excluded
+      filter_keys:
+        - "dns.cnameRecords"
+        - "dns.hosts"
+        - "dns.upstreams"
+        - "webserver.session.timeout"
+    # Sync includes as described in https://ftl.pi-hole.net/master/docs/#post-/teleporter
+    # Omitted entries are validated as true
+    teleporter_options:
+      # This syncs the *COMPLETE* config. It is automatically set to false if config_sync is present
+      config: true
+      dhcp_leases: true
+      gravity:
+        group: true
+        adlist_by_group: true
+        domainlist: true
+        domainlist_by_group: true
+        client: true
+        client_by_group: true
+
+  - host: secondary-pihole-2.example.com
+    schema: https
+    port: 443
+    api_key: YOUR_SECONDARY_PIHOLE_APP_PASSWORD
+    update_gravity: true
+    # Sync includes as described in https://ftl.pi-hole.net/master/docs/#post-/teleporter
+    # Omitted entries are validated as true
+    teleporter_options:
+      # This syncs the *COMPLETE* config. It is automatically set to false if config_sync is present
+      config: true
+      dhcp_leases: false
+      gravity:
+        group: true
+        adlist_by_group: true
+        domainlist: false
+        domainlist_by_group: false
+        client: true
+        client_by_group: false
