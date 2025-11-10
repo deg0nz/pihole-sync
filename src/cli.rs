@@ -15,7 +15,7 @@ use tracing::{info, warn};
 
 #[derive(Parser)]
 #[command(name = "pihole-sync")]
-#[command(about = "Syncs Pi-hole v6 instances using REST API", long_about = None)]
+#[command(about = "Syncs Pi-Hole v6 instances using REST API", long_about = None)]
 pub struct Cli {
     /// Path to the configuration file
     #[arg(short, long)]
