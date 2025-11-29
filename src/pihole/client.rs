@@ -70,18 +70,15 @@ impl PiHoleClient {
         let auth_url = format!("{}/auth", self.base_url);
         let body = serde_json::json!({ "password": if let Some(pw) = password { pw } else { self.config.api_key.clone() } });
 
-        let response = self
-            .client
-            .post(&auth_url)
-            .json(&body)
-            .send()
-            .await?
-            .json::<AuthResponse>()
-            .await?;
+        let response = self.client.post(&auth_url).json(&body).send().await?;
+
+        dbg!(&response);
 
         debug!("[{}] Auth Response: {:?}", self.config.host, response);
 
-        if let Some(token) = response.session.sid {
+        let res_json = response.json::<AuthResponse>().await?;
+
+        if let Some(token) = res_json.session.sid {
             self.set_token(token.clone()).await?;
         } else {
             anyhow::bail!("[{}] Failed to authenticate: No session ID received. This probably means that the API password is invalid.", self.config.host);
