@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
 use reqwest::{
+    header::COOKIE,
     multipart::{Form, Part},
-    Client, ClientBuilder, Response, StatusCode,
+    Client, ClientBuilder, RequestBuilder, Response, StatusCode,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -46,7 +47,7 @@ pub struct PiHoleClient {
     pub config: InstanceConfig,
 }
 
-const X_FTL_SID_HEADER: &str = "sid";
+const X_FTL_SID_HEADER: &str = "X-FTL-SID";
 static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
 
 impl PiHoleClient {
@@ -72,18 +73,30 @@ impl PiHoleClient {
 
         let response = self.client.post(&auth_url).json(&body).send().await?;
 
-        dbg!(&response);
+        // dbg!(&response);
 
         debug!("[{}] Auth Response: {:?}", self.config.host, response);
 
         let res_json = response.json::<AuthResponse>().await?;
 
         if let Some(token) = res_json.session.sid {
+            debug!("[{}] Authentication successful.", self.config.host);
             self.set_token(token.clone()).await?;
         } else {
             anyhow::bail!("[{}] Failed to authenticate: No session ID received. This probably means that the API password is invalid.", self.config.host);
         }
         Ok(())
+    }
+
+    async fn authorized_request(&self, request: RequestBuilder) -> Result<Response> {
+        let token = self.get_session_token().await?;
+
+        request
+            .header(X_FTL_SID_HEADER, &token)
+            .header(COOKIE, format!("sid={token}"))
+            .send()
+            .await
+            .map_err(Into::into)
     }
 
     pub async fn fetch_app_password(&self, password: String) -> Result<AppPassword> {
@@ -92,10 +105,7 @@ impl PiHoleClient {
         let app_auth_url = format!("{}/auth/app", self.base_url);
 
         let response = self
-            .client
-            .get(&app_auth_url)
-            .header(X_FTL_SID_HEADER, self.get_session_token().await?)
-            .send()
+            .authorized_request(self.client.get(&app_auth_url))
             .await?;
 
         if response.status().is_client_error() {
@@ -111,14 +121,10 @@ impl PiHoleClient {
     async fn is_logged_in(&self) -> Result<bool> {
         debug!("Checking login status");
         let url = format!("{}/auth", self.base_url);
-        let response = self
-            .client
-            .get(&url)
-            .header(X_FTL_SID_HEADER, self.get_session_token().await?)
-            .send()
-            .await?;
+        let response = self.authorized_request(self.client.get(&url)).await?;
 
         if response.status() == StatusCode::UNAUTHORIZED {
+            debug!("Not Authenticated");
             return Ok(false);
         }
 
@@ -126,7 +132,9 @@ impl PiHoleClient {
 
         // Update token if we get a new one
         if let Some(token) = auth_response.session.sid {
+            debug!("Received token");
             if &token != self.session_token.lock().await.as_ref().unwrap() {
+                debug!("Token is new");
                 self.set_token(token).await?
             }
         }
@@ -157,12 +165,7 @@ impl PiHoleClient {
         self.ensure_authenticated().await?;
         let url = format!("{}{}", self.base_url, endpoint);
 
-        let request = self
-            .client
-            .get(&url)
-            .header(X_FTL_SID_HEADER, self.get_session_token().await?)
-            .send()
-            .await?;
+        let request = self.authorized_request(self.client.get(&url)).await?;
 
         Ok(request)
     }
@@ -173,10 +176,7 @@ impl PiHoleClient {
 
         let url = format!("{}{}", self.base_url, endpoint);
 
-        self.client
-            .post(&url)
-            .header(X_FTL_SID_HEADER, self.get_session_token().await?)
-            .send()
+        self.authorized_request(self.client.post(&url))
             .await?
             .error_for_status()
             .context(format!("POST request failed: {}", url))
@@ -188,11 +188,7 @@ impl PiHoleClient {
 
         let url = format!("{}{}", self.base_url, endpoint);
 
-        self.client
-            .patch(&url)
-            .json(&data)
-            .header(X_FTL_SID_HEADER, self.get_session_token().await?)
-            .send()
+        self.authorized_request(self.client.patch(&url).json(&data))
             .await?
             .error_for_status()
             .context(format!("PATCH request failed: {}", url))
@@ -204,12 +200,7 @@ impl PiHoleClient {
 
         let url = format!("{}{}", self.base_url, endpoint);
 
-        let res = self
-            .client
-            .post(&url)
-            .header(X_FTL_SID_HEADER, self.get_session_token().await?)
-            .send()
-            .await?;
+        let res = self.authorized_request(self.client.post(&url)).await?;
 
         Ok(res)
     }
@@ -251,12 +242,12 @@ impl PiHoleClient {
         }
 
         let response = self
-            .client
-            .post(&url)
-            .header(X_FTL_SID_HEADER, self.get_session_token().await?)
-            .multipart(form)
-            .header("Content-Type", "application/zip")
-            .send()
+            .authorized_request(
+                self.client
+                    .post(&url)
+                    .multipart(form)
+                    .header("Content-Type", "application/zip"),
+            )
             .await?;
 
         match response.error_for_status() {
