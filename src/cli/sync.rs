@@ -1,7 +1,7 @@
 use std::{fs, path::Path, time::Duration};
 
 use tokio::time::sleep;
-use tracing::{debug, error, info};
+use tracing::{error, info};
 
 use crate::pihole::client::PiHoleClient;
 use crate::pihole::config_filter::FilterMode;

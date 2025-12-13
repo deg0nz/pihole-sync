@@ -1,6 +1,6 @@
 mod app_password;
 mod instances;
-mod sync;
+pub mod sync;
 
 use std::path::Path;
 
