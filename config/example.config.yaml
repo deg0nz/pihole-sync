@@ -18,8 +18,12 @@ secondary:
     port: 443
     api_key: YOUR_SECONDARY_PIHOLE_APP_PASSWORD
     update_gravity: true
-    # Optional, if present the config will be synced via the API instead of teleporter
-    config_sync:
+    # Select sync mechanism (mutually exclusive per secondary)
+    # - teleporter: sync via Pi-hole teleporter endpoint (/teleporter)
+    # - config_api: sync via config endpoint (/config) using `config_api_sync_options` filters
+    # If omitted, `config_api_sync_options` implies config_api for backwards compatibility.
+    sync_mode: config_api
+    config_api_sync_options:
       # If false: Listed filter keys will be handled as opt-in, so only the listed keys will be synced recursively (default)
       # If true: Listed filter keys will be handled as opt-out, so all keys except the listed ones will be synced recursively
       exclude: false
@@ -30,29 +34,17 @@ secondary:
         - "dns.hosts"
         - "dns.upstreams"
         - "webserver.session.timeout"
-    # Sync includes as described in https://ftl.pi-hole.net/master/docs/#post-/teleporter
-    # Omitted entries are validated as true
-    teleporter_options:
-      # This syncs the *COMPLETE* config. It is automatically set to false if config_sync is present
-      config: true
-      dhcp_leases: true
-      gravity:
-        group: true
-        adlist_by_group: true
-        domainlist: true
-        domainlist_by_group: true
-        client: true
-        client_by_group: true
 
   - host: secondary-pihole-2.example.com
     schema: https
     port: 443
     api_key: YOUR_SECONDARY_PIHOLE_APP_PASSWORD
     update_gravity: true
+    sync_mode: teleporter
     # Sync includes as described in https://ftl.pi-hole.net/master/docs/#post-/teleporter
     # Omitted entries are validated as true
-    teleporter_options:
-      # This syncs the *COMPLETE* config. It is automatically set to false if config_sync is present
+    teleporter_sync_options:
+      # This syncs the *COMPLETE* config (teleporter mode only; ignored in config_api mode)
       config: true
       dhcp_leases: false
       gravity:

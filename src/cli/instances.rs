@@ -63,10 +63,13 @@ pub fn run_instances_cmd(
                 schema,
                 port,
                 api_key,
+                config_api_sync_options: None,
                 config_sync: None,
                 update_gravity: Some(update_gravity),
+                sync_mode: None,
                 import_options: None,
-                teleporter_options: Some(crate::config::TeleporterImportOptions::default()),
+                teleporter_sync_options: Some(crate::config::TeleporterImportOptions::default()),
+                teleporter_options: None,
             });
             config.save(config_path)?;
             info!("Instance added successfully!");

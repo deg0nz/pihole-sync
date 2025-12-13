@@ -238,7 +238,7 @@ impl PiHoleClient {
             .text("resourceName", "pihole_backup.zip")
             .part("file", file_part);
 
-        if let Some(teleporter_options) = self.config.teleporter_options.clone() {
+        if let Some(teleporter_options) = self.config.teleporter_sync_options.clone() {
             let teleporter_options_part = Part::text(serde_json::to_string(&teleporter_options)?);
             form = form.part("import", teleporter_options_part);
         }
@@ -377,7 +377,8 @@ impl PiHoleClient {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn has_config_filters(&self) -> bool {
-        self.config.config_sync.is_some()
+        self.config.config_api_sync_options.is_some() || self.config.config_sync.is_some()
     }
 }
