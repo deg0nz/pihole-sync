@@ -39,9 +39,16 @@ pub struct InstanceConfig {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ConfigSyncOptions {
-    #[serde(default = "default_false")]
-    pub exclude: bool,
+    #[serde(default)]
+    pub mode: Option<ConfigApiSyncMode>,
     pub filter_keys: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigApiSyncMode {
+    Include,
+    Exclude,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -81,10 +88,6 @@ pub struct Config {
 
 fn default_true() -> bool {
     true
-}
-
-fn default_false() -> bool {
-    false
 }
 
 impl Default for TeleporterImportOptions {
@@ -197,6 +200,16 @@ impl Config {
                 }
             };
             secondary.sync_mode = Some(effective_mode);
+
+            if let Some(options) = secondary.config_api_sync_options.as_mut() {
+                if options.mode.is_none() {
+                    warn!(
+                        "[{}] config_api_sync_options.mode is not set; defaulting to \"include\"",
+                        secondary.host
+                    );
+                    options.mode = Some(ConfigApiSyncMode::Include);
+                }
+            }
 
             match effective_mode {
                 SyncMode::ConfigApi => {

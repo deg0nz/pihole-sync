@@ -24,9 +24,8 @@ secondary:
     # If omitted, `config_api_sync_options` implies config_api for backwards compatibility.
     sync_mode: config_api
     config_api_sync_options:
-      # If false: Listed filter keys will be handled as opt-in, so only the listed keys will be synced recursively (default)
-      # If true: Listed filter keys will be handled as opt-out, so all keys except the listed ones will be synced recursively
-      exclude: false
+      # If omitted, defaults to include with a warning
+      mode: include
       # List of keys/paths to include or exclude
       # All children of a given key will be included/excluded
       filter_keys:

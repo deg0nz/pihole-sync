@@ -3,7 +3,7 @@ use std::{fs, path::Path, time::Duration};
 use tokio::time::sleep;
 use tracing::{error, info};
 
-use crate::config::SyncMode;
+use crate::config::{ConfigApiSyncMode, SyncMode};
 use crate::pihole::client::PiHoleClient;
 use crate::pihole::config_filter::FilterMode;
 use crate::{config::Config, pihole::config_filter::ConfigFilter};
@@ -165,11 +165,10 @@ async fn sync_pihole_config_filtered(
     secondary: &PiHoleClient,
 ) -> Result<(), Error> {
     if let Some(config_sync) = secondary.config.config_api_sync_options.clone() {
-        let mut filter_mode = FilterMode::OptIn;
-
-        if config_sync.exclude {
-            filter_mode = FilterMode::OptOut;
-        }
+        let filter_mode = match config_sync.mode.unwrap_or(ConfigApiSyncMode::Include) {
+            ConfigApiSyncMode::Include => FilterMode::OptIn,
+            ConfigApiSyncMode::Exclude => FilterMode::OptOut,
+        };
 
         let filter = ConfigFilter::new(&config_sync.filter_keys, filter_mode);
         let filtered_config = filter.filter_json(main_config.clone());
