@@ -136,6 +136,8 @@ impl PiHoleClient {
             if &token != self.session_token.lock().await.as_ref().unwrap() {
                 debug!("Token is new");
                 self.set_token(token).await?
+            } else {
+                debug!("Re-using token");
             }
         }
 

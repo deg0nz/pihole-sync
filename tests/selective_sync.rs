@@ -1,11 +1,6 @@
-use std::{
-    env,
-    os::unix::net::UnixStream,
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::path::PathBuf;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use pihole_sync::{
     cli::sync::run_sync,
     config::{Config, ConfigSyncOptions, InstanceConfig, SyncConfig, TeleporterImportOptions},
@@ -13,14 +8,12 @@ use pihole_sync::{
 };
 use serde_json::{json, Value};
 use tempfile::TempDir;
-use testcontainers::core::IntoContainerPort;
-use testcontainers::{runners::AsyncRunner, ContainerAsync, GenericImage, ImageExt};
-use tokio::time::sleep;
 
 mod common;
+use common::pihole::PiHoleInstance;
+use common::{ensure_docker_host, spawn_pihole};
 
 const WEBPASSWORD: &str = "admin";
-const STARTUP_TIMEOUT: Duration = Duration::from_secs(90);
 
 #[derive(Clone)]
 struct SeedData {
@@ -50,96 +43,11 @@ impl SeedData {
     }
 }
 
-struct PiHoleInstance {
-    _container: ContainerAsync<GenericImage>,
-    client: PiHoleClient,
-}
-
-async fn spawn_pihole() -> Result<PiHoleInstance> {
-    let image = GenericImage::new("pihole/pihole", "latest")
-        .with_exposed_port(80.tcp())
-        .with_env_var("WEBPASSWORD", WEBPASSWORD)
-        .with_env_var("FTLCONF_webserver_api_password", WEBPASSWORD)
-        .with_env_var("DNSMASQ_LISTENING", "all")
-        .with_env_var("FTLCONF_LOCAL_IPV4", "0.0.0.0")
-        .with_env_var("TZ", "UTC");
-
-    let container = image.start().await?;
-    let host_port = container.get_host_port_ipv4(80).await?;
-
-    let base_config = InstanceConfig {
-        host: "127.0.0.1".into(),
-        schema: "http".into(),
-        port: host_port,
-        api_key: WEBPASSWORD.into(),
-        update_gravity: Some(false),
-        config_sync: None,
-        import_options: None,
-        teleporter_options: Some(TeleporterImportOptions::default()),
-    };
-
-    let client = PiHoleClient::new(base_config);
-    wait_for_ready(&client).await?;
-
-    Ok(PiHoleInstance {
-        _container: container,
-        client,
+async fn spawn_test_pihole() -> Result<PiHoleInstance> {
+    spawn_pihole(WEBPASSWORD, None, |config| {
+        config.teleporter_options = Some(TeleporterImportOptions::default());
     })
-}
-
-async fn wait_for_ready(client: &PiHoleClient) -> Result<()> {
-    let start = std::time::Instant::now();
-    let mut last_err: Option<anyhow::Error> = None;
-
-    while start.elapsed() < STARTUP_TIMEOUT {
-        match client.get_config().await {
-            Ok(_) => return Ok(()),
-            Err(err) => {
-                last_err = Some(err);
-                sleep(Duration::from_secs(3)).await;
-            }
-        }
-    }
-
-    Err(anyhow!(
-        "Pi-hole API not ready after {:?}: {:?}",
-        STARTUP_TIMEOUT,
-        last_err.map(|e| e.to_string())
-    ))
-}
-
-fn ensure_docker_host() -> Result<()> {
-    let env_host = env::var("DOCKER_HOST").ok();
-    let candidates: Vec<String> = if let Some(host) = env_host.clone() {
-        vec![host]
-    } else {
-        vec!["unix:///var/run/docker.sock".into()]
-    };
-
-    for host in &candidates {
-        if let Some(socket) = host.strip_prefix("unix://") {
-            if UnixStream::connect(socket).is_ok() {
-                return Ok(());
-            }
-        }
-    }
-
-    if env_host.is_none() {
-        if let Some(home) = env::var_os("HOME") {
-            let colima = Path::new(&home).join(".colima/default/docker.sock");
-            if colima.exists() {
-                return Err(anyhow!(
-                    "Docker not reachable. Set DOCKER_HOST=unix://{}",
-                    colima.display()
-                ));
-            }
-        }
-    }
-
-    Err(anyhow!(
-        "Docker not reachable at {:?}. Set DOCKER_HOST to your Docker socket (e.g. unix:///var/run/docker.sock or your Colima socket).",
-        candidates
-    ))
+    .await
 }
 
 async fn seed_config(client: &PiHoleClient, seed: &SeedData) -> Result<Value> {
@@ -233,8 +141,8 @@ async fn selective_sync_opt_in_and_opt_out() -> Result<()> {
 
 async fn run_opt_in() -> Result<()> {
     let temp_dir = TempDir::new().context("failed to create temp dir")?;
-    let main = spawn_pihole().await?;
-    let secondary = spawn_pihole().await?;
+    let main = spawn_test_pihole().await?;
+    let secondary = spawn_test_pihole().await?;
 
     let main_seeded = seed_config(&main.client, &SeedData::main_seed())
         .await
@@ -288,8 +196,8 @@ async fn run_opt_in() -> Result<()> {
 
 async fn run_opt_out() -> Result<()> {
     let temp_dir = TempDir::new().context("failed to create temp dir")?;
-    let main = spawn_pihole().await?;
-    let secondary = spawn_pihole().await?;
+    let main = spawn_test_pihole().await?;
+    let secondary = spawn_test_pihole().await?;
 
     let main_seeded = seed_config(&main.client, &SeedData::main_seed())
         .await

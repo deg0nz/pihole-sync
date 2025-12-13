@@ -1,3 +1,6 @@
+pub mod pihole;
+pub use pihole::{ensure_docker_host, spawn_pihole, STARTUP_TIMEOUT};
+
 use std::sync::Once;
 
 use tracing_log::LogTracer;
