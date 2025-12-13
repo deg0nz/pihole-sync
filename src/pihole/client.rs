@@ -8,7 +8,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::{path::Path, sync::Arc};
 use tokio::sync::Mutex;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::config::InstanceConfig;
 
@@ -65,9 +65,14 @@ impl PiHoleClient {
         }
     }
 
+    fn instance_label(&self) -> (&str, u16) {
+        (&self.config.host, self.config.port)
+    }
+
     /// **Authenticate and get session token**
     async fn authenticate(&self, password: Option<String>) -> Result<()> {
-        debug!("[{}] Authenticating", self.config.host);
+        let (host, port) = self.instance_label();
+        debug!("[{}:{}] Authenticating", host, port);
         let auth_url = format!("{}/auth", self.base_url);
         let body = serde_json::json!({ "password": if let Some(pw) = password { pw } else { self.config.api_key.clone() } });
 
@@ -75,31 +80,22 @@ impl PiHoleClient {
 
         // dbg!(&response);
 
-        debug!("[{}] Auth Response: {:?}", self.config.host, response);
+        debug!("[{}:{}] Auth Response: {:?}", host, port, response);
 
         let res_json = response.json::<AuthResponse>().await?;
 
         if let Some(token) = res_json.session.sid {
-            debug!("[{}] Authentication successful.", self.config.host);
+            debug!("[{}:{}] Authentication successful.", host, port);
             self.set_token(token.clone()).await?;
         } else {
-            anyhow::bail!("[{}] Failed to authenticate: No session ID received. This probably means that the API password is invalid.", self.config.host);
+            anyhow::bail!("[{}:{}] Failed to authenticate: No session ID received. This probably means that the API password is invalid.", host, port);
         }
         Ok(())
     }
 
-    async fn authorized_request(&self, request: RequestBuilder) -> Result<Response> {
-        let token = self.get_session_token().await?;
-
-        request
-            .header(X_FTL_SID_HEADER, &token)
-            .header(COOKIE, format!("sid={token}"))
-            .send()
-            .await
-            .map_err(Into::into)
-    }
-
     pub async fn fetch_app_password(&self, password: String) -> Result<AppPassword> {
+        let (host, port) = self.instance_label();
+        debug!("[{}:{}] Fetching app password", host, port);
         self.authenticate(Some(password)).await?;
 
         let app_auth_url = format!("{}/auth/app", self.base_url);
@@ -119,12 +115,13 @@ impl PiHoleClient {
 
     /// **Check if session is still valid**
     async fn is_logged_in(&self) -> Result<bool> {
-        debug!("Checking login status");
+        let (host, port) = self.instance_label();
+        trace!("[{}:{}] Checking login status", host, port);
         let url = format!("{}/auth", self.base_url);
         let response = self.authorized_request(self.client.get(&url)).await?;
 
         if response.status() == StatusCode::UNAUTHORIZED {
-            debug!("Not Authenticated");
+            debug!("[{}:{}] Not authenticated", host, port);
             return Ok(false);
         }
 
@@ -132,26 +129,255 @@ impl PiHoleClient {
 
         // Update token if we get a new one
         if let Some(token) = auth_response.session.sid {
-            debug!("Received token");
+            trace!("[{}:{}] Received token", host, port);
             if &token != self.session_token.lock().await.as_ref().unwrap() {
-                debug!("Token is new");
+                debug!("[{}:{}] Token is different from the cached one", host, port);
                 self.set_token(token).await?
             } else {
-                debug!("Re-using token");
+                trace!("[{}:{}] Re-using cached token", host, port);
             }
         }
 
-        debug!("Authenticated? {:?}", auth_response.session.valid);
+        trace!(
+            "[{}:{}] Authenticated? {:?}",
+            host,
+            port,
+            auth_response.session.valid
+        );
 
         Ok(auth_response.session.valid)
     }
 
     async fn set_token(&self, token: String) -> Result<()> {
-        debug!("Updating token");
+        let (host, port) = self.instance_label();
+        debug!("[{}:{}] Caching token", host, port);
         let mut local_token = self.session_token.lock().await;
         *local_token = Some(token);
 
         Ok(())
+    }
+
+    /// Downloads a backup from the Teleporter API.
+    pub async fn download_backup(&self, output_path: &Path) -> Result<()> {
+        let (host, port) = self.instance_label();
+        debug!("[{}:{}] Downloading Teleporter backup", host, port);
+        self.ensure_authenticated().await?;
+
+        let response = self.get("/teleporter").await?;
+        let bytes = response.bytes().await?;
+
+        tokio::fs::write(output_path, &bytes)
+            .await
+            .context("Failed to write backup file")?;
+
+        info!("[{}:{}] Successfully downloaded backup archive", host, port);
+        Ok(())
+    }
+
+    /// Uploads a backup to the Teleporter API.
+    pub async fn upload_backup(&self, file_path: &Path) -> Result<()> {
+        let (host, port) = self.instance_label();
+        debug!("[{}:{}] Uploading Teleporter backup", host, port);
+        self.ensure_authenticated().await?;
+
+        let file_bytes = tokio::fs::read(file_path).await?;
+        let url = format!("{}/teleporter", self.base_url);
+
+        let file_part = Part::bytes(file_bytes).file_name("pihole_backup.zip");
+
+        let mut form = Form::new()
+            .text("resourceName", "pihole_backup.zip")
+            .part("file", file_part);
+
+        if let Some(teleporter_options) = self.config.teleporter_sync_options.clone() {
+            let teleporter_options_part = Part::text(serde_json::to_string(&teleporter_options)?);
+            form = form.part("import", teleporter_options_part);
+        }
+
+        let response = self
+            .authorized_request(
+                self.client
+                    .post(&url)
+                    .multipart(form)
+                    .header("Content-Type", "application/zip"),
+            )
+            .await?;
+
+        match response.error_for_status() {
+            Ok(res) => {
+                info!("[{}:{}] Successfully uploaded backup", host, port);
+                info!("[{}:{}] Processed:", host, port);
+                res.json::<BackupUploadProcessedResponse>()
+                    .await?
+                    .files
+                    .iter()
+                    .for_each(|file| info!("[{}:{}]   {}", host, port, file));
+            }
+            Err(err) => {
+                debug!("[{}:{}] Error: {}", host, port, err.to_string());
+                return Err(err.into());
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Triggers a gravity update.
+    pub async fn trigger_gravity_update(&self) -> Result<()> {
+        let (host, port) = self.instance_label();
+        trace!("[{}:{}] Triggering gravity update", host, port);
+        self.post("/action/gravity").await?;
+        info!("[{}:{}] Triggered gravity update", host, port);
+        Ok(())
+    }
+
+    async fn get_session_token(&self) -> Result<String> {
+        let session_token = self.session_token.lock().await.clone();
+        Ok(session_token.unwrap_or("".to_string()))
+    }
+
+    pub async fn logout(&self) -> Result<()> {
+        let (host, port) = self.instance_label();
+        trace!("[{}:{}] Logging out", host, port);
+        self.delete("/auth").await?;
+        info!("[{}:{}] Logged out", host, port);
+        Ok(())
+    }
+
+    /// Retrieves session timeout in seconds
+    async fn get_session_timeout(&self) -> Result<u64> {
+        let response = self.get("/config/webserver/session/timeout").await?;
+        let v: Value = response.json().await?;
+        if let Some(timeout) = v
+            .get("config")
+            .and_then(|config| config.get("webserver"))
+            .and_then(|webserver| webserver.get("session"))
+            .and_then(|session| session.get("timeout"))
+            .and_then(|timeout| timeout.as_u64())
+        {
+            return Ok(timeout);
+        }
+
+        Ok(0)
+    }
+
+    pub async fn get_config(&self) -> Result<Value> {
+        let (host, port) = self.instance_label();
+        trace!("[{}:{}] Fetching /config", host, port);
+        let response = self.get("/config").await?;
+        let v: Value = response.json().await?;
+
+        // TODO: Remove unwrap, handle None
+        Ok(v.get("config").unwrap().to_owned())
+    }
+
+    pub async fn patch_config(&self, config: Value) -> Result<()> {
+        let (host, port) = self.instance_label();
+        trace!("[{}:{}] Patching /config", host, port);
+        self.patch("/config", config).await?;
+        Ok(())
+    }
+
+    async fn start_session_keepalive(&self, interval_seconds: u64) -> Result<()> {
+        let host = self.config.host.clone();
+        let port = self.config.port;
+        // Ensure we have a valid session before starting the keepalive loop
+        self.ensure_authenticated().await?;
+
+        // Get the initial session token that we'll be maintaining
+        let initial_token = self.get_session_token().await?;
+        debug!(
+            "[{}:{}] Starting keepalive job for session token: {}",
+            host, port, initial_token
+        );
+
+        let client = self.clone();
+
+        tokio::spawn(async move {
+            let mut interval =
+                tokio::time::interval(tokio::time::Duration::from_secs(interval_seconds));
+
+            loop {
+                interval.tick().await;
+                trace!("[{}:{}] Performing session keepalive check", host, port);
+
+                match client.get("/auth").await {
+                    Ok(response) => match response.json::<AuthResponse>().await {
+                        Ok(auth_response) => {
+                            if !auth_response.session.valid {
+                                warn!(
+                                    "[{}:{}] Session became invalid during keepalive. Cancelling keepalive.",
+                                    host, port
+                                );
+                                return;
+                            } else {
+                                trace!("[{}:{}] Session keepalive successful", host, port);
+                            }
+                        }
+                        Err(e) => error!(
+                            "[{}:{}] Failed to parse keepalive response: {}",
+                            host, port, e
+                        ),
+                    },
+                    Err(e) => error!("[{}:{}] Session keepalive check failed: {}", host, port, e),
+                }
+            }
+        });
+
+        Ok(())
+    }
+
+    pub async fn init_session_keepalive(&self, sync_interval_seconds: u64) -> Result<()> {
+        let (host, port) = self.instance_label();
+        let session_timeout = self.get_session_timeout().await?;
+        let keepalive_interval = sync_interval_seconds - 30;
+
+        if session_timeout == 0 {
+            warn!(
+                "[{}:{}] Couldn't retrieve session timeout correctly. Not starting keepalive interval.",
+                host, port
+            );
+            return Ok(());
+        }
+
+        if session_timeout < sync_interval_seconds {
+            info!("[{}:{}] Sync interval is greater than PiHole's session timeout. Starting session keepalive interval.", host, port);
+            debug!(
+                "[{}:{}] Sync interval: {} seconds",
+                host, port, sync_interval_seconds
+            );
+            debug!(
+                "[{}:{}] Session Timeout: {} seconds",
+                host, port, session_timeout
+            );
+            debug!(
+                "[{}:{}] Session Keepalive interval: {} seconds",
+                host, port, keepalive_interval
+            );
+            self.start_session_keepalive(keepalive_interval).await?;
+        }
+
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub fn has_config_filters(&self) -> bool {
+        self.config.config_api_sync_options.is_some() || self.config.config_sync.is_some()
+    }
+
+    /////////////////////////
+    /// HTTP Request helpers
+    /////////////////////////
+
+    async fn authorized_request(&self, request: RequestBuilder) -> Result<Response> {
+        let token = self.get_session_token().await?;
+
+        request
+            .header(X_FTL_SID_HEADER, &token)
+            .header(COOKIE, format!("sid={token}"))
+            .send()
+            .await
+            .map_err(Into::into)
     }
 
     /// **Ensure authentication before making requests**
@@ -205,180 +431,5 @@ impl PiHoleClient {
         let res = self.authorized_request(self.client.post(&url)).await?;
 
         Ok(res)
-    }
-
-    /// Downloads a backup from the Teleporter API.
-    pub async fn download_backup(&self, output_path: &Path) -> Result<()> {
-        self.ensure_authenticated().await?;
-
-        let response = self.get("/teleporter").await?;
-        let bytes = response.bytes().await?;
-
-        tokio::fs::write(output_path, &bytes)
-            .await
-            .context("Failed to write backup file")?;
-
-        info!(
-            "[{}] Successfully downloaded backup archive",
-            self.config.host
-        );
-        Ok(())
-    }
-
-    /// Uploads a backup to the Teleporter API.
-    pub async fn upload_backup(&self, file_path: &Path) -> Result<()> {
-        self.ensure_authenticated().await?;
-
-        let file_bytes = tokio::fs::read(file_path).await?;
-        let url = format!("{}/teleporter", self.base_url);
-
-        let file_part = Part::bytes(file_bytes).file_name("pihole_backup.zip");
-
-        let mut form = Form::new()
-            .text("resourceName", "pihole_backup.zip")
-            .part("file", file_part);
-
-        if let Some(teleporter_options) = self.config.teleporter_sync_options.clone() {
-            let teleporter_options_part = Part::text(serde_json::to_string(&teleporter_options)?);
-            form = form.part("import", teleporter_options_part);
-        }
-
-        let response = self
-            .authorized_request(
-                self.client
-                    .post(&url)
-                    .multipart(form)
-                    .header("Content-Type", "application/zip"),
-            )
-            .await?;
-
-        match response.error_for_status() {
-            Ok(res) => {
-                info!("[{}] Successfully uploaded backup", self.config.host);
-                info!("Processed:");
-                res.json::<BackupUploadProcessedResponse>()
-                    .await?
-                    .files
-                    .iter()
-                    .for_each(|file| info!("  {}", file));
-            }
-            Err(err) => {
-                debug!("Error: {}", err.to_string());
-                return Err(err.into());
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Triggers a gravity update.
-    pub async fn trigger_gravity_update(&self) -> Result<()> {
-        self.post("/action/gravity").await?;
-        info!("[{}] Triggered gravity update", self.config.host);
-        Ok(())
-    }
-
-    async fn get_session_token(&self) -> Result<String> {
-        let session_token = self.session_token.lock().await.clone();
-        Ok(session_token.unwrap_or("".to_string()))
-    }
-
-    pub async fn logout(&self) -> Result<()> {
-        self.delete("/auth").await?;
-        info!("[{}] Logged out", self.config.host);
-        Ok(())
-    }
-
-    /// Retrieves session timeout in seconds
-    async fn get_session_timeout(&self) -> Result<u64> {
-        let response = self.get("/config/webserver/session/timeout").await?;
-        let v: Value = response.json().await?;
-        if let Some(timeout) = v
-            .get("config")
-            .and_then(|config| config.get("webserver"))
-            .and_then(|webserver| webserver.get("session"))
-            .and_then(|session| session.get("timeout"))
-            .and_then(|timeout| timeout.as_u64())
-        {
-            return Ok(timeout);
-        }
-
-        Ok(0)
-    }
-
-    pub async fn get_config(&self) -> Result<Value> {
-        let response = self.get("/config").await?;
-        let v: Value = response.json().await?;
-
-        // TODO: Remove unwrap, handle None
-        Ok(v.get("config").unwrap().to_owned())
-    }
-
-    pub async fn patch_config(&self, config: Value) -> Result<()> {
-        self.patch("/config", config).await?;
-        Ok(())
-    }
-
-    async fn start_session_keepalive(&self, interval_seconds: u64) -> Result<()> {
-        // Ensure we have a valid session before starting the keepalive loop
-        self.ensure_authenticated().await?;
-
-        // Get the initial session token that we'll be maintaining
-        let initial_token = self.get_session_token().await?;
-        debug!("Starting keepalive for session token: {}", initial_token);
-
-        let client = self.clone();
-
-        tokio::spawn(async move {
-            let mut interval =
-                tokio::time::interval(tokio::time::Duration::from_secs(interval_seconds));
-
-            loop {
-                interval.tick().await;
-                debug!("Performing session keepalive check");
-
-                match client.get("/auth").await {
-                    Ok(response) => match response.json::<AuthResponse>().await {
-                        Ok(auth_response) => {
-                            if !auth_response.session.valid {
-                                warn!("Session became invalid during keepalive. Cancelling keepalive.");
-                                return;
-                            } else {
-                                debug!("Session keepalive successful");
-                            }
-                        }
-                        Err(e) => error!("Failed to parse keepalive response: {}", e),
-                    },
-                    Err(e) => error!("Session keepalive check failed: {}", e),
-                }
-            }
-        });
-
-        Ok(())
-    }
-
-    pub async fn init_session_keepalive(&self, sync_interval_seconds: u64) -> Result<()> {
-        let session_timeout = self.get_session_timeout().await?;
-        let keepalive_interval = sync_interval_seconds - 30;
-
-        if session_timeout == 0 {
-            warn!("[{}] Couldn't retrieve session timeout correctly. Not starting keepalive interval.", self.config.host);
-            return Ok(());
-        }
-
-        if session_timeout < sync_interval_seconds {
-            info!("[{}] Sync interval is greater than PiHole's session timeout. Starting session keepalive interval.", self.config.host);
-            debug!("Sync interval: {} seconds", sync_interval_seconds);
-            debug!("Session Timeout: {} seconds", session_timeout);
-            debug!("Session Keepalive interval: {} seconds", keepalive_interval);
-            self.start_session_keepalive(keepalive_interval).await?;
-        }
-
-        Ok(())
-    }
-
-    #[allow(dead_code)]
-    pub fn has_config_filters(&self) -> bool {
-        self.config.config_api_sync_options.is_some() || self.config.config_sync.is_some()
     }
 }
