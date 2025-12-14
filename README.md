@@ -8,6 +8,7 @@ The sync goes one-to-many. One main instance is specified and it's configuration
 ## Features
 
 - Syncs everything contained in Pi-hole's Teleporter backups
+- Syncs selected config keys via Pi-hole's `/config` API (filtered)
 - Acquire app passwords for Pi-hole API
 - Modify and add Pi-hole instances via CLI
 
@@ -30,10 +31,13 @@ cargo build --release
 
 The default config location is `/etc/pihole-sync/config.yaml`, you need to specify `--config /path/to/config.toml` via CLI, if you don't use the default path.
 
-- Configure your main and secondary instances in the configuration file. (Please [refer to example config](./config-examples/config.example.yaml))
+- Configure your main and secondary instances in the configuration file. (Please [refer to example config](./config/example.config.yaml))
   - Leave the password free for now. You can generate one via the CLI command `pihole-sync app-password` (add `--config /path/to/config.toml` if you don't use the default path ;))
   - Add the printed **password hash** to your respective Pi-hole instance under Settings > Webserver and API > webserver.api.app_pwhash  (Refer to Pi-hole API documentation for more information: https://ftl.pi-hole.net/master/docs/#get-/auth/app)
   - Add the printed **app password** to the config.toml
+- Per secondary, choose a sync mechanism using `sync_mode`:
+  - `teleporter` uses `/teleporter`
+  - `config_api` uses `/config` and requires `config_api_sync_options` filters
 - Run `pihole-sync sync` for running in sync mode
   - You can also run `pihole-sync sync --once` to run the sync once and exit.
 
