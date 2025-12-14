@@ -49,26 +49,16 @@ impl Cli {
 
         let mut config_path_str = "";
 
-        let config_path_toml = Path::new("/etc/pihole-sync/config.toml");
         let config_path_yaml = Path::new("/etc/pihole-sync/config.yaml");
 
-        if config_path_toml.exists() && config_path_yaml.exists() {
-            panic!("TOML and YAML config files found. Please remove one of them.");
-        }
-
-        if config_path_toml.exists() {
-            warn!(
-                "DEPRECATED: TOML config files are deprecated. Please migrate to YAML config file."
-            );
-            config_path_str = config_path_toml.to_str().unwrap();
-        } else if config_path_yaml.exists() {
+        if config_path_yaml.exists() {
             config_path_str = config_path_yaml.to_str().unwrap();
         }
 
         if let Some(config_path_cli) = &cli.config {
             config_path_str = config_path_cli;
         } else if config_path_str.is_empty() {
-            panic!("No default config found and --config not specified. Please create a default config file (/etc/pihole-sync/config.yaml) or use the --config flag.")
+            panic!("No default config found and --config not specified. Please create a default YAML config file (/etc/pihole-sync/config.yaml) or use the --config flag.")
         }
 
         info!("Using config: {}", config_path_str);

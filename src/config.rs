@@ -141,27 +141,8 @@ impl Config {
         let content = fs::read_to_string(&path)
             .with_context(|| format!("Failed to read config file: {:?}", path.as_ref()))?;
 
-        // Get file extension
-        let extension = path
-            .as_ref()
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .unwrap_or("");
-
-        // Parse based on file extension
-        let mut config: Config = match extension.to_lowercase().as_str() {
-            "yaml" | "yml" => serde_yaml::from_str(&content)
-                .with_context(|| "Failed to parse config file as YAML")?,
-            "toml" => {
-                warn!("DEPRECATION WARNING: TOML configs are deprecated and support for them will be removed in 1.0.0. Please migrate to YAML config");
-                toml::from_str(&content).with_context(|| "Failed to parse config file as TOML")?
-            }
-            _ => {
-                return Err(anyhow::anyhow!(
-                    "Unsupported config file format. Use .yaml, .yml, or .toml"
-                ))
-            }
-        };
+        let mut config: Config = serde_yaml::from_str(&content)
+            .with_context(|| "Failed to parse config file as YAML")?;
 
         for secondary in &mut config.secondary {
             // Migrate deprecated config keys to new names (keep backwards compatibility).
@@ -279,26 +260,8 @@ impl Config {
     }
 
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<()> {
-        // Get file extension
-        let extension = path
-            .as_ref()
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .unwrap_or("");
-
-        // Serialize based on file extension
         let content =
-            match extension.to_lowercase().as_str() {
-                "yaml" | "yml" => serde_yaml::to_string(self)
-                    .context("Failed to serialize configuration to YAML")?,
-                "toml" => toml::to_string_pretty(self)
-                    .context("Failed to serialize configuration to TOML")?,
-                _ => {
-                    return Err(anyhow::anyhow!(
-                        "Unsupported config file format. Use .yaml, .yml, or .toml"
-                    ))
-                }
-            };
+            serde_yaml::to_string(self).context("Failed to serialize configuration to YAML")?;
 
         fs::write(&path, content).context("Failed to write configuration file")?;
         Ok(())

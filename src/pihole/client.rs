@@ -1,6 +1,5 @@
 use anyhow::{anyhow, Context, Result};
 use reqwest::{
-    header::COOKIE,
     multipart::{Form, Part},
     Client, ClientBuilder, RequestBuilder, Response, StatusCode,
 };
@@ -35,7 +34,6 @@ struct Session {
     #[allow(dead_code)]
     totp: Option<bool>,
     sid: Option<String>,
-    csrf: Option<String>,
     #[allow(dead_code)]
     validity: Option<u64>,
 }
@@ -50,12 +48,10 @@ pub struct PiHoleClient {
     base_url: String,
     client: Client,
     session_token: Arc<Mutex<Option<String>>>,
-    csrf_token: Arc<Mutex<Option<String>>>,
     pub config: InstanceConfig,
 }
 
 const X_FTL_SID_HEADER: &str = "X-FTL-SID";
-const X_FTL_CSRF_HEADER: &str = "X-FTL-CSRF";
 static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
 
 impl PiHoleClient {
@@ -69,7 +65,6 @@ impl PiHoleClient {
                 .unwrap(),
             base_url,
             session_token: Arc::new(Mutex::new(None)),
-            csrf_token: Arc::new(Mutex::new(None)),
             config,
         }
     }
@@ -92,9 +87,6 @@ impl PiHoleClient {
         if let Some(token) = res_json.session.sid {
             debug!("[{}:{}] Authentication successful.", host, port);
             self.set_token(token).await?;
-            if let Some(csrf) = res_json.session.csrf {
-                self.set_csrf(csrf).await?;
-            }
         } else {
             anyhow::bail!("[{}:{}] Failed to authenticate: No session ID received. This probably means that the API password is invalid.", host, port);
         }
@@ -150,10 +142,6 @@ impl PiHoleClient {
             };
         }
 
-        if let Some(csrf) = auth_response.session.csrf {
-            self.set_csrf(csrf).await?;
-        }
-
         trace!(
             "[{}:{}] Authenticated? {:?}",
             host,
@@ -170,12 +158,6 @@ impl PiHoleClient {
         let mut local_token = self.session_token.lock().await;
         *local_token = Some(token);
 
-        Ok(())
-    }
-
-    async fn set_csrf(&self, token: String) -> Result<()> {
-        let mut local_token = self.csrf_token.lock().await;
-        *local_token = Some(token);
         Ok(())
     }
 
@@ -281,7 +263,6 @@ impl PiHoleClient {
                 .context(format!("Logout request failed: {}", url))?;
         }
         *self.session_token.lock().await = None;
-        *self.csrf_token.lock().await = None;
         info!("[{}:{}] Logged out", host, port);
         Ok(())
     }
@@ -374,16 +355,7 @@ impl PiHoleClient {
 
     async fn authorized_request(&self, request: RequestBuilder) -> Result<Response> {
         let token = self.get_session_token().await?;
-        let csrf = self.csrf_token.lock().await.clone();
-
-        let request = request
-            .header(X_FTL_SID_HEADER, &token)
-            .header(COOKIE, format!("sid={token}"));
-        let request = if let Some(csrf) = csrf {
-            request.header(X_FTL_CSRF_HEADER, csrf)
-        } else {
-            request
-        };
+        let request = request.header(X_FTL_SID_HEADER, &token);
 
         request.send().await.map_err(Into::into)
     }

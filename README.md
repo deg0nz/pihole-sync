@@ -9,6 +9,7 @@ The sync goes one-to-many. One main instance is specified and it's configuration
 
 - Syncs everything contained in Pi-hole's Teleporter backups
 - Syncs selected config keys via Pi-hole's `/config` API (filtered)
+- Supports interval-based syncs, watching the Pi-hole config file, or polling `/api/config` for changes
 - Acquire app passwords for Pi-hole API
 - Modify and add Pi-hole instances via CLI
 
@@ -27,19 +28,24 @@ cargo build --release
 
 ## How to Use
 
-> Note: Config file schema changed to YAML. (TOML is currentlystill supported, but will be dropped in 1.0)
+> Note: Config file schema is YAML. TOML configs are no longer supported.
 
-The default config location is `/etc/pihole-sync/config.yaml`, you need to specify `--config /path/to/config.toml` via CLI, if you don't use the default path.
+The default config location is `/etc/pihole-sync/config.yaml`; use `--config /path/to/config.yaml` via CLI if you don't use the default path.
 
-- Configure your main and secondary instances in the configuration file. (Please [refer to example config](./config/example.config.yaml))
-  - Leave the password free for now. You can generate one via the CLI command `pihole-sync app-password` (add `--config /path/to/config.toml` if you don't use the default path ;))
+- Configure your main and secondary instances in the YAML configuration file. (Please [refer to example config](./config/example.config.yaml))
+  - Leave the password free for now. You can generate one via the CLI command `pihole-sync app-password` (add `--config /path/to/config.yaml` if you don't use the default path ;))
   - Add the printed **password hash** to your respective Pi-hole instance under Settings > Webserver and API > webserver.api.app_pwhash  (Refer to Pi-hole API documentation for more information: https://ftl.pi-hole.net/master/docs/#get-/auth/app)
-  - Add the printed **app password** to the config.toml
+  - Add the printed **app password** to your config file
 - Per secondary, choose a sync mechanism using `sync_mode`:
   - `teleporter` uses `/teleporter`
   - `config_api` uses `/config` and requires `config_api_sync_options` filters
-- Run `pihole-sync sync` for running in sync mode
-  - You can also run `pihole-sync sync --once` to run the sync once and exit.
+- Choose how syncs are triggered in `sync.trigger_mode`:
+  - `interval` (default): run every `sync.interval` minutes
+  - `watch_config_file`: watch `/etc/pihole/pihole.toml` (override via `sync.config_path`)
+  - `watch_config_api`: poll `/api/config` every `sync.api_poll_interval` minutes (falls back to `sync.interval`)
+- Run `pihole-sync sync` for running in sync mode (sessions are logged out after each run to avoid occupying Pi-hole session slots)
+  - Use `pihole-sync sync --once` to run the sync once and exit.
+  - Use `pihole-sync sync --no-initial-sync` to start watchers without an initial sync.
 
 
 # Disclaimer
