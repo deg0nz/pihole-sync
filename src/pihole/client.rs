@@ -44,10 +44,12 @@ pub struct PiHoleClient {
     base_url: String,
     client: Client,
     session_token: Arc<Mutex<Option<String>>>,
+    csrf_token: Arc<Mutex<Option<String>>>,
     pub config: InstanceConfig,
 }
 
 const X_FTL_SID_HEADER: &str = "X-FTL-SID";
+const X_FTL_CSRF_HEADER: &str = "X-FTL-CSRF";
 static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
 
 impl PiHoleClient {
@@ -61,6 +63,7 @@ impl PiHoleClient {
                 .unwrap(),
             base_url,
             session_token: Arc::new(Mutex::new(None)),
+            csrf_token: Arc::new(Mutex::new(None)),
             config,
         }
     }
@@ -78,15 +81,14 @@ impl PiHoleClient {
 
         let response = self.client.post(&auth_url).json(&body).send().await?;
 
-        // dbg!(&response);
-
-        debug!("[{}:{}] Auth Response: {:?}", host, port, response);
-
         let res_json = response.json::<AuthResponse>().await?;
 
         if let Some(token) = res_json.session.sid {
             debug!("[{}:{}] Authentication successful.", host, port);
-            self.set_token(token.clone()).await?;
+            self.set_token(token).await?;
+            if let Some(csrf) = res_json.session.csrf {
+                self.set_csrf(csrf).await?;
+            }
         } else {
             anyhow::bail!("[{}:{}] Failed to authenticate: No session ID received. This probably means that the API password is invalid.", host, port);
         }
@@ -130,12 +132,20 @@ impl PiHoleClient {
         // Update token if we get a new one
         if let Some(token) = auth_response.session.sid {
             trace!("[{}:{}] Received token", host, port);
-            if &token != self.session_token.lock().await.as_ref().unwrap() {
-                debug!("[{}:{}] Token is different from the cached one", host, port);
-                self.set_token(token).await?
-            } else {
-                trace!("[{}:{}] Re-using cached token", host, port);
-            }
+            let cached = self.session_token.lock().await.clone();
+            match cached {
+                Some(cached_token) if cached_token == token => {
+                    trace!("[{}:{}] Re-using cached token", host, port);
+                }
+                _ => {
+                    debug!("[{}:{}] Updating cached token", host, port);
+                    self.set_token(token).await?;
+                }
+            };
+        }
+
+        if let Some(csrf) = auth_response.session.csrf {
+            self.set_csrf(csrf).await?;
         }
 
         trace!(
@@ -154,6 +164,12 @@ impl PiHoleClient {
         let mut local_token = self.session_token.lock().await;
         *local_token = Some(token);
 
+        Ok(())
+    }
+
+    async fn set_csrf(&self, token: String) -> Result<()> {
+        let mut local_token = self.csrf_token.lock().await;
+        *local_token = Some(token);
         Ok(())
     }
 
@@ -239,7 +255,27 @@ impl PiHoleClient {
     pub async fn logout(&self) -> Result<()> {
         let (host, port) = self.instance_label();
         trace!("[{}:{}] Logging out", host, port);
-        self.delete("/auth").await?;
+        let cached_token = self.session_token.lock().await.clone();
+        if cached_token.is_none() {
+            trace!("[{}:{}] No cached token; skipping logout", host, port);
+            return Ok(());
+        }
+
+        let url = format!("{}/auth", self.base_url);
+        let response = self.authorized_request(self.client.delete(&url)).await?;
+        // Pi-hole returns 410 Gone on successful logout (no content).
+        if response.status() == StatusCode::GONE
+            || response.status().is_success()
+            || response.status() == StatusCode::UNAUTHORIZED
+        {
+            trace!("[{}:{}] Already logged out", host, port);
+        } else {
+            response
+                .error_for_status()
+                .context(format!("Logout request failed: {}", url))?;
+        }
+        *self.session_token.lock().await = None;
+        *self.csrf_token.lock().await = None;
         info!("[{}:{}] Logged out", host, port);
         Ok(())
     }
@@ -371,17 +407,29 @@ impl PiHoleClient {
 
     async fn authorized_request(&self, request: RequestBuilder) -> Result<Response> {
         let token = self.get_session_token().await?;
+        let csrf = self.csrf_token.lock().await.clone();
 
-        request
+        let request = request
             .header(X_FTL_SID_HEADER, &token)
-            .header(COOKIE, format!("sid={token}"))
-            .send()
-            .await
-            .map_err(Into::into)
+            .header(COOKIE, format!("sid={token}"));
+        let request = if let Some(csrf) = csrf {
+            request.header(X_FTL_CSRF_HEADER, csrf)
+        } else {
+            request
+        };
+
+        request.send().await.map_err(Into::into)
     }
 
     /// **Ensure authentication before making requests**
     async fn ensure_authenticated(&self) -> Result<()> {
+        // If we don't have a cached SID yet, avoid the extra round-trip to `/auth`
+        // with an empty token (which will always yield 401).
+        if self.session_token.lock().await.is_none() {
+            self.authenticate(None).await?;
+            return Ok(());
+        }
+
         if !self.is_logged_in().await? {
             self.authenticate(None).await?;
         }
