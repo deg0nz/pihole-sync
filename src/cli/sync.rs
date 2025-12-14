@@ -144,9 +144,19 @@ pub async fn run_sync(config_path: &str, run_once: bool) -> Result<()> {
 
         if run_once {
             info!("Sync complete. Exiting because --once was specified.");
-            main_pihole.logout().await?;
+            if let Err(e) = main_pihole.logout().await {
+                error!(
+                    "[{}] Failed to logout from main instance: {:?}",
+                    main_pihole.config.host, e
+                );
+            }
             for secondary in &secondary_piholes {
-                secondary.logout().await?;
+                if let Err(e) = secondary.logout().await {
+                    error!(
+                        "[{}] Failed to logout from secondary instance: {:?}",
+                        secondary.config.host, e
+                    );
+                }
             }
             return Ok(());
         }
@@ -174,7 +184,7 @@ async fn sync_pihole_config_filtered(
         let filtered_config = filter.filter_json(main_config.clone());
 
         secondary
-            .patch_config(serde_json::json!({ "config": filtered_config }))
+            .patch_config_and_wait_for_ftl_readiness(filtered_config)
             .await?;
     }
 

@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use reqwest::{
     header::COOKIE,
     multipart::{Form, Part},
@@ -6,8 +6,14 @@ use reqwest::{
 };
 use serde::Deserialize;
 use serde_json::Value;
-use std::{path::Path, sync::Arc};
+use std::{
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
+    path::Path,
+    sync::Arc,
+};
 use tokio::sync::Mutex;
+use tokio::time::{sleep, Duration, Instant};
 use tracing::{debug, error, info, trace, warn};
 
 use crate::config::InstanceConfig;
@@ -31,7 +37,12 @@ struct AppPasswordResponse {
 #[derive(Debug, Deserialize)]
 struct Session {
     valid: bool,
+    #[allow(dead_code)]
+    totp: Option<bool>,
     sid: Option<String>,
+    csrf: Option<String>,
+    #[allow(dead_code)]
+    validity: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -310,8 +321,85 @@ impl PiHoleClient {
     pub async fn patch_config(&self, config: Value) -> Result<()> {
         let (host, port) = self.instance_label();
         trace!("[{}:{}] Patching /config", host, port);
+
+        // dbg!(&config);
+
         self.patch("/config", config).await?;
         Ok(())
+    }
+
+    /// Patch the config, wait for the API to become ready again, and verify the change took effect.
+    pub async fn patch_config_and_wait_for_ftl_readiness(&self, config: Value) -> Result<()> {
+        let (host, port) = self.instance_label();
+        trace!("[{}:{}] Patching /config with verification", host, port);
+
+        self.patch_config(serde_json::json!({ "config": config.clone() }))
+            .await?;
+
+        // Wait for FTL/api to come back after the restart window.
+        self.wait_for_ready(Duration::from_secs(10)).await?;
+
+        // let ftl_info = self.get("/info/ftl").await?;
+
+        // let ftl_info: Value = ftl_info.json().await?;
+
+        // dbg!(ftl_info);
+
+        Ok(())
+    }
+
+    /// Wait until the Pi-hole API responds again (covering the FTL restart window).
+    pub async fn wait_for_ready(&self, timeout: Duration) -> Result<()> {
+        let (host, port) = self.instance_label();
+        let start = Instant::now();
+        let mut attempt: u32 = 0;
+
+        // sleep(Duration::from_millis(1_000)).await;
+
+        loop {
+            attempt += 1;
+            match self.ensure_authenticated().await {
+                Ok(_) => {
+                    debug!("[{}:{}] API ready after {} attempt(s)", host, port, attempt);
+                    return Ok(());
+                }
+                Err(e) => {
+                    let elapsed = start.elapsed();
+                    if elapsed >= timeout {
+                        return Err(anyhow!(
+                            "[{}:{}] API not ready after {:?}: {}",
+                            host,
+                            port,
+                            elapsed,
+                            e
+                        ));
+                    }
+
+                    // Jittered exponential backoff capped at 1s.
+                    let backoff_ms = (2u64.pow(attempt.min(6)) * 50).min(1_000);
+                    trace!(
+                        "[{}:{}] API not ready yet ({}). Retrying in {}ms",
+                        host,
+                        port,
+                        e,
+                        backoff_ms
+                    );
+                    sleep(Duration::from_millis(backoff_ms)).await;
+                }
+            }
+        }
+    }
+
+    fn config_fingerprint(config: &Value) -> Result<u64> {
+        // Hash a deterministic string representation to detect changes.
+        let serialized = serde_json::to_string(config)?;
+        let mut hasher = DefaultHasher::new();
+        serialized.hash(&mut hasher);
+        Ok(hasher.finish())
+    }
+
+    fn configs_match(&self, desired: &Value, actual: &Value) -> Result<bool> {
+        Ok(Self::config_fingerprint(desired)? == Self::config_fingerprint(actual)?)
     }
 
     async fn start_session_keepalive(&self, interval_seconds: u64) -> Result<()> {
@@ -396,11 +484,6 @@ impl PiHoleClient {
         Ok(())
     }
 
-    #[allow(dead_code)]
-    pub fn has_config_filters(&self) -> bool {
-        self.config.config_api_sync_options.is_some() || self.config.config_sync.is_some()
-    }
-
     /////////////////////////
     /// HTTP Request helpers
     /////////////////////////
@@ -468,16 +551,5 @@ impl PiHoleClient {
             .await?
             .error_for_status()
             .context(format!("PATCH request failed: {}", url))
-    }
-
-    /// Sends an authenticated POST request to the Pi-hole API.
-    async fn delete(&self, endpoint: &str) -> Result<Response> {
-        self.ensure_authenticated().await?;
-
-        let url = format!("{}{}", self.base_url, endpoint);
-
-        let res = self.authorized_request(self.client.post(&url)).await?;
-
-        Ok(res)
     }
 }
