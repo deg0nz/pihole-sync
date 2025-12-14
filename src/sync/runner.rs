@@ -64,6 +64,7 @@ pub async fn run_sync(config_path: &str, run_once: bool, disable_initial_sync: b
     info!("Running in sync mode...");
 
     if run_once {
+        info!("Mode: run-once (no watcher).");
         perform_sync(
             &main_pihole,
             &secondary_piholes,
@@ -118,6 +119,10 @@ pub async fn run_sync(config_path: &str, run_once: bool, disable_initial_sync: b
             let main_clone = main_pihole.clone();
             let secondaries_clone = secondary_piholes.clone();
             let backup_clone = backup_path.clone();
+            info!(
+                "Mode: interval. Running every {} minute(s).",
+                sync_interval.as_secs() / 60
+            );
             run_interval_mode(
                 sync_interval,
                 move || {
@@ -146,6 +151,10 @@ pub async fn run_sync(config_path: &str, run_once: bool, disable_initial_sync: b
             let main_clone = main_pihole.clone();
             let secondaries_clone = secondary_piholes.clone();
             let backup_path_clone = backup_path.clone();
+            info!(
+                "Mode: watch_config_file. Watching {}.",
+                config_watch_path.display()
+            );
             watch_config_file(&config_watch_path, move || {
                 let main = main_clone.clone();
                 let secondaries = secondaries_clone.clone();
@@ -170,6 +179,10 @@ pub async fn run_sync(config_path: &str, run_once: bool, disable_initial_sync: b
             let main_for_sync = main_pihole.clone();
             let secondaries_clone = secondary_piholes.clone();
             let backup_path_clone = backup_path.clone();
+            info!(
+                "Mode: watch_config_api. Polling every {} minute(s).",
+                api_poll_interval.as_secs() / 60
+            );
             watch_config_api_main(
                 main_pihole.clone(),
                 api_poll_interval,
