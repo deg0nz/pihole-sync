@@ -6,15 +6,10 @@ use reqwest::{
 };
 use serde::Deserialize;
 use serde_json::Value;
-use std::{
-    collections::hash_map::DefaultHasher,
-    hash::{Hash, Hasher},
-    path::Path,
-    sync::Arc,
-};
+use std::{path::Path, sync::Arc};
 use tokio::sync::Mutex;
 use tokio::time::{sleep, Duration, Instant};
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, info, trace};
 
 use crate::config::InstanceConfig;
 
@@ -291,23 +286,6 @@ impl PiHoleClient {
         Ok(())
     }
 
-    /// Retrieves session timeout in seconds
-    async fn get_session_timeout(&self) -> Result<u64> {
-        let response = self.get("/config/webserver/session/timeout").await?;
-        let v: Value = response.json().await?;
-        if let Some(timeout) = v
-            .get("config")
-            .and_then(|config| config.get("webserver"))
-            .and_then(|webserver| webserver.get("session"))
-            .and_then(|session| session.get("timeout"))
-            .and_then(|timeout| timeout.as_u64())
-        {
-            return Ok(timeout);
-        }
-
-        Ok(0)
-    }
-
     pub async fn get_config(&self) -> Result<Value> {
         let (host, port) = self.instance_label();
         trace!("[{}:{}] Fetching /config", host, port);
@@ -388,100 +366,6 @@ impl PiHoleClient {
                 }
             }
         }
-    }
-
-    fn config_fingerprint(config: &Value) -> Result<u64> {
-        // Hash a deterministic string representation to detect changes.
-        let serialized = serde_json::to_string(config)?;
-        let mut hasher = DefaultHasher::new();
-        serialized.hash(&mut hasher);
-        Ok(hasher.finish())
-    }
-
-    fn configs_match(&self, desired: &Value, actual: &Value) -> Result<bool> {
-        Ok(Self::config_fingerprint(desired)? == Self::config_fingerprint(actual)?)
-    }
-
-    async fn start_session_keepalive(&self, interval_seconds: u64) -> Result<()> {
-        let host = self.config.host.clone();
-        let port = self.config.port;
-        // Ensure we have a valid session before starting the keepalive loop
-        self.ensure_authenticated().await?;
-
-        // Get the initial session token that we'll be maintaining
-        let initial_token = self.get_session_token().await?;
-        debug!(
-            "[{}:{}] Starting keepalive job for session token: {}",
-            host, port, initial_token
-        );
-
-        let client = self.clone();
-
-        tokio::spawn(async move {
-            let mut interval =
-                tokio::time::interval(tokio::time::Duration::from_secs(interval_seconds));
-
-            loop {
-                interval.tick().await;
-                trace!("[{}:{}] Performing session keepalive check", host, port);
-
-                match client.get("/auth").await {
-                    Ok(response) => match response.json::<AuthResponse>().await {
-                        Ok(auth_response) => {
-                            if !auth_response.session.valid {
-                                warn!(
-                                    "[{}:{}] Session became invalid during keepalive. Cancelling keepalive.",
-                                    host, port
-                                );
-                                return;
-                            } else {
-                                trace!("[{}:{}] Session keepalive successful", host, port);
-                            }
-                        }
-                        Err(e) => error!(
-                            "[{}:{}] Failed to parse keepalive response: {}",
-                            host, port, e
-                        ),
-                    },
-                    Err(e) => error!("[{}:{}] Session keepalive check failed: {}", host, port, e),
-                }
-            }
-        });
-
-        Ok(())
-    }
-
-    pub async fn init_session_keepalive(&self, sync_interval_seconds: u64) -> Result<()> {
-        let (host, port) = self.instance_label();
-        let session_timeout = self.get_session_timeout().await?;
-        let keepalive_interval = sync_interval_seconds - 30;
-
-        if session_timeout == 0 {
-            warn!(
-                "[{}:{}] Couldn't retrieve session timeout correctly. Not starting keepalive interval.",
-                host, port
-            );
-            return Ok(());
-        }
-
-        if session_timeout < sync_interval_seconds {
-            info!("[{}:{}] Sync interval is greater than PiHole's session timeout. Starting session keepalive interval.", host, port);
-            debug!(
-                "[{}:{}] Sync interval: {} seconds",
-                host, port, sync_interval_seconds
-            );
-            debug!(
-                "[{}:{}] Session Timeout: {} seconds",
-                host, port, session_timeout
-            );
-            debug!(
-                "[{}:{}] Session Keepalive interval: {} seconds",
-                host, port, keepalive_interval
-            );
-            self.start_session_keepalive(keepalive_interval).await?;
-        }
-
-        Ok(())
     }
 
     /////////////////////////

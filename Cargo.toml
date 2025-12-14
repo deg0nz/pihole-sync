@@ -16,6 +16,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dialoguer = "0.11.0"
 indicatif = "0.17.11"
 serde_yaml = "0.9.34"
+notify = "6"
 
 [dev-dependencies]
 testcontainers = "0.26.0"

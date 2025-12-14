@@ -1,6 +1,12 @@
 sync:
-  # Interval in minutes between sync operations
+  # How to trigger syncs: interval | watch_config_file | watch_config_api
+  trigger_mode: interval
+  # Interval in minutes between sync operations (also default poll interval for watch_config_api)
   interval: 60
+  # Poll interval in minutes for watch_config_api (falls back to interval when omitted)
+  api_poll_interval: 5
+  # Pi-hole config path to watch when trigger_mode is watch_config_file
+  config_path: /etc/pihole/pihole.toml
   # Cache location for temporary files (inside the container)
   cache_location: /var/cache/pihole-sync
 

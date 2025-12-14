@@ -10,10 +10,24 @@ pub enum SyncMode {
     ConfigApi,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncTriggerMode {
+    Interval,
+    WatchConfigFile,
+    WatchConfigApi,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SyncConfig {
     pub interval: u64,
     pub cache_location: String,
+    #[serde(default = "default_trigger_mode")]
+    pub trigger_mode: SyncTriggerMode,
+    #[serde(default = "default_pihole_config_path")]
+    pub config_path: String,
+    #[serde(default)]
+    pub api_poll_interval: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -88,6 +102,14 @@ pub struct Config {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_trigger_mode() -> SyncTriggerMode {
+    SyncTriggerMode::Interval
+}
+
+fn default_pihole_config_path() -> String {
+    "/etc/pihole/pihole.toml".to_string()
 }
 
 impl Default for TeleporterImportOptions {

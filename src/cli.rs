@@ -1,16 +1,15 @@
 mod app_password;
 mod instances;
-pub mod sync;
 
 use std::path::Path;
 
 use crate::config::Config;
+use crate::sync::run_sync;
 
 use anyhow::Result;
 use app_password::acquire_app_password;
 use clap::{Parser, Subcommand};
 use instances::{run_instances_cmd, Instances};
-use sync::run_sync;
 use tracing::{info, warn};
 
 #[derive(Parser)]
@@ -32,6 +31,9 @@ enum Commands {
         /// Run once and exit
         #[arg(short, long, action)]
         once: bool,
+        /// Skip the initial sync run on startup (useful for watch modes)
+        #[arg(long, action)]
+        no_initial_sync: bool,
     },
 
     /// Acquire an app password for a Pi-hole instance
@@ -75,8 +77,11 @@ impl Cli {
             let mut config = Config::load(config_path_str)?;
 
             match command {
-                Commands::Sync { once } => {
-                    run_sync(config_path_str, once).await?;
+                Commands::Sync {
+                    once,
+                    no_initial_sync,
+                } => {
+                    run_sync(config_path_str, once, no_initial_sync).await?;
                 }
 
                 Commands::AppPassword => {
