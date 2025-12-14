@@ -1,4 +1,5 @@
 pub mod pihole;
+#[allow(unused_imports)]
 pub use pihole::{ensure_docker_host, spawn_pihole, STARTUP_TIMEOUT};
 
 use std::sync::Once;

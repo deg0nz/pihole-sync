@@ -15,6 +15,12 @@ async fn auth_with_app_password() -> Result<()> {
     ensure_docker_host()?;
     let mut instance = spawn_pihole(WEBPASSWORD, None, |_| {}).await?;
 
+    tracing::debug!(
+        "[test] pihole at {}:{}",
+        instance.client.config.host,
+        instance.client.config.port
+    );
+
     // Wrong password should fail to authenticate
     let bad_attempt = instance
         .client

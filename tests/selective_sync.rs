@@ -1,9 +1,9 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
 
 use anyhow::{Context, Result};
 use pihole_sync::{
     cli::sync::run_sync,
-    config::{Config, ConfigSyncOptions, InstanceConfig, SyncConfig, TeleporterImportOptions},
+    config::{Config, ConfigApiSyncMode, ConfigSyncOptions, InstanceConfig, SyncConfig, SyncMode},
     pihole::client::PiHoleClient,
 };
 use serde_json::{json, Value};
@@ -12,8 +12,11 @@ use tempfile::TempDir;
 mod common;
 use common::pihole::PiHoleInstance;
 use common::{ensure_docker_host, spawn_pihole};
+use tokio::time::sleep;
+use tracing::debug;
 
-const WEBPASSWORD: &str = "admin";
+const MAIN_WEBPASSWORD: &str = "admin-main";
+const SECONDARY_WEBPASSWORD: &str = "admin-secondary";
 
 #[derive(Clone)]
 struct SeedData {
@@ -43,11 +46,8 @@ impl SeedData {
     }
 }
 
-async fn spawn_test_pihole() -> Result<PiHoleInstance> {
-    spawn_pihole(WEBPASSWORD, None, |config| {
-        config.teleporter_options = Some(TeleporterImportOptions::default());
-    })
-    .await
+async fn spawn_test_pihole(password: &str) -> Result<PiHoleInstance> {
+    spawn_pihole(password, None, |_| {}).await
 }
 
 async fn seed_config(client: &PiHoleClient, seed: &SeedData) -> Result<Value> {
@@ -67,7 +67,7 @@ async fn seed_config(client: &PiHoleClient, seed: &SeedData) -> Result<Value> {
     );
 
     client
-        .patch_config(json!({ "config": config }))
+        .patch_config_and_wait_for_ftl_readiness(json!({ "config": config }))
         .await
         .context("failed to patch config with seed data")?;
 
@@ -111,11 +111,14 @@ fn write_test_config(
     main: InstanceConfig,
     secondary: InstanceConfig,
 ) -> Result<PathBuf> {
-    let cache_dir = dir.path().join("cache");
+    let cache_location = dir.path().join("cache_location_sentinel");
+    std::fs::write(&cache_location, "do-not-use-teleporter")
+        .context("failed to create cache location sentinel file")?;
+
     let config = Config {
         sync: SyncConfig {
             interval: 1,
-            cache_location: cache_dir
+            cache_location: cache_location
                 .to_str()
                 .context("failed to convert cache path to string")?
                 .to_string(),
@@ -129,20 +132,29 @@ fn write_test_config(
     Ok(path)
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn selective_sync_opt_in_and_opt_out() -> Result<()> {
+#[tokio::test()]
+async fn config_api_selective_sync_include_and_exclude() -> Result<()> {
     common::init_logging();
     ensure_docker_host()?;
-    run_opt_in().await?;
-    run_opt_out().await?;
+    run_include_mode().await?;
+    run_exclude_mode().await?;
 
     Ok(())
 }
 
-async fn run_opt_in() -> Result<()> {
+async fn run_include_mode() -> Result<()> {
     let temp_dir = TempDir::new().context("failed to create temp dir")?;
-    let main = spawn_test_pihole().await?;
-    let secondary = spawn_test_pihole().await?;
+    let main = spawn_test_pihole(MAIN_WEBPASSWORD).await?;
+    let secondary = spawn_test_pihole(SECONDARY_WEBPASSWORD).await?;
+
+    debug!(
+        "[test] main at {}:{}",
+        main.client.config.host, main.client.config.port
+    );
+    debug!(
+        "[test] secondary at {}:{}",
+        secondary.client.config.host, secondary.client.config.port
+    );
 
     let main_seeded = seed_config(&main.client, &SeedData::main_seed())
         .await
@@ -152,9 +164,10 @@ async fn run_opt_in() -> Result<()> {
         .context("failed to seed secondary config")?;
 
     let mut secondary_cfg = secondary.client.config.clone();
-    secondary_cfg.config_sync = Some(ConfigSyncOptions {
-        exclude: false,
-        filter_keys: vec!["dns.upstreams".into(), "webserver.session".into()],
+    secondary_cfg.sync_mode = Some(SyncMode::ConfigApi);
+    secondary_cfg.config_api_sync_options = Some(ConfigSyncOptions {
+        mode: Some(ConfigApiSyncMode::Include),
+        filter_keys: vec!["dns.upstreams".into(), "webserver.session.timeout".into()],
     });
 
     let config_path =
@@ -194,10 +207,21 @@ async fn run_opt_in() -> Result<()> {
     Ok(())
 }
 
-async fn run_opt_out() -> Result<()> {
+async fn run_exclude_mode() -> Result<()> {
     let temp_dir = TempDir::new().context("failed to create temp dir")?;
-    let main = spawn_test_pihole().await?;
-    let secondary = spawn_test_pihole().await?;
+    let main = spawn_test_pihole(MAIN_WEBPASSWORD).await?;
+    let secondary = spawn_test_pihole(SECONDARY_WEBPASSWORD).await?;
+
+    tracing::debug!(
+        "[test] main at {}:{}",
+        main.client.config.host,
+        main.client.config.port
+    );
+    tracing::debug!(
+        "[test] secondary at {}:{}",
+        secondary.client.config.host,
+        secondary.client.config.port
+    );
 
     let main_seeded = seed_config(&main.client, &SeedData::main_seed())
         .await
@@ -207,8 +231,9 @@ async fn run_opt_out() -> Result<()> {
         .context("failed to seed secondary config")?;
 
     let mut secondary_cfg = secondary.client.config.clone();
-    secondary_cfg.config_sync = Some(ConfigSyncOptions {
-        exclude: true,
+    secondary_cfg.sync_mode = Some(SyncMode::ConfigApi);
+    secondary_cfg.config_api_sync_options = Some(ConfigSyncOptions {
+        mode: Some(ConfigApiSyncMode::Exclude),
         filter_keys: vec!["dns.cnameRecords".into()],
     });
 
