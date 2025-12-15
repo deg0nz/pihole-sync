@@ -20,6 +20,10 @@ pub struct Cli {
     #[arg(short, long)]
     pub config: Option<String>,
 
+    /// Print version information
+    #[arg(short = 'V', long = "version", action)]
+    pub version: bool,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -46,6 +50,11 @@ enum Commands {
 impl Cli {
     pub async fn parse_args() -> Result<()> {
         let cli = Cli::parse();
+
+        if cli.version {
+            println!("pihole-sync {}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
+        }
 
         let mut config_path_str = "";
 
