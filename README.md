@@ -38,7 +38,9 @@ The default config location is `/etc/pihole-sync/config.yaml`; use `--config /pa
   - Add the printed **app password** to your config file
 - Per secondary, choose a sync mechanism using `sync_mode`:
   - `teleporter` uses `/teleporter`
-  - `config_api` uses `/config` and requires `config_api_sync_options` filters
+  - `config_api` uses `/config` with `config_api_sync_options` filters:
+    - `mode: include` (default) — only listed `filter_keys` are synced; empty list syncs nothing.
+    - `mode: exclude` — everything is synced except the listed `filter_keys`; empty list syncs everything.
 - Choose how syncs are triggered in `sync.trigger_mode`:
   - `interval` (default): run every `sync.interval` minutes
   - `watch_config_file`: watch `/etc/pihole/pihole.toml` (override via `sync.config_path`)
