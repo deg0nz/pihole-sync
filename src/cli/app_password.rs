@@ -6,7 +6,7 @@ use indicatif::ProgressBar;
 
 use crate::{
     config::{Config, InstanceConfig},
-    pihole_client::{AppPassword, PiHoleClient},
+    pihole::client::{AppPassword, PiHoleClient},
 };
 
 pub async fn acquire_app_password(config_path: &str) -> Result<()> {

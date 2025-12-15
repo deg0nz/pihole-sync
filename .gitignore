@@ -2,6 +2,7 @@ target/
 cache/
 pihole-backup.zip
 
+myConfig/
 my.config.toml
 my.config.yaml
 

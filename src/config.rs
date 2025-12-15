@@ -1,11 +1,34 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
+use tracing::warn;
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncMode {
+    Teleporter,
+    ConfigApi,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncTriggerMode {
+    Interval,
+    WatchConfigFile,
+    WatchConfigApi,
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SyncConfig {
+    #[serde(default = "default_interval_minutes")]
     pub interval: u64,
     pub cache_location: String,
+    #[serde(default = "default_trigger_mode")]
+    pub trigger_mode: SyncTriggerMode,
+    #[serde(default = "default_pihole_config_path")]
+    pub config_path: String,
+    #[serde(default)]
+    pub api_poll_interval: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -15,11 +38,36 @@ pub struct InstanceConfig {
     pub port: u16,
     pub api_key: String,
     pub update_gravity: Option<bool>,
-    pub import_options: Option<SyncImportOptions>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync_mode: Option<SyncMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_api_sync_options: Option<ConfigSyncOptions>,
+    #[serde(default, skip_serializing_if = "Option::is_none", skip_serializing)]
+    pub config_sync: Option<ConfigSyncOptions>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub teleporter_sync_options: Option<TeleporterImportOptions>,
+    #[serde(default, skip_serializing_if = "Option::is_none", skip_serializing)]
+    pub teleporter_options: Option<TeleporterImportOptions>,
+    #[serde(default, skip_serializing_if = "Option::is_none", skip_serializing)]
+    pub import_options: Option<TeleporterImportOptions>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct SyncImportOptions {
+pub struct ConfigSyncOptions {
+    #[serde(default)]
+    pub mode: Option<ConfigApiSyncMode>,
+    pub filter_keys: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigApiSyncMode {
+    Include,
+    Exclude,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TeleporterImportOptions {
     #[serde(default = "default_true")]
     pub config: bool,
     #[serde(default = "default_true")]
@@ -57,7 +105,19 @@ fn default_true() -> bool {
     true
 }
 
-impl Default for SyncImportOptions {
+fn default_trigger_mode() -> SyncTriggerMode {
+    SyncTriggerMode::Interval
+}
+
+fn default_pihole_config_path() -> String {
+    "/etc/pihole/pihole.toml".to_string()
+}
+
+fn default_interval_minutes() -> u64 {
+    60
+}
+
+impl Default for TeleporterImportOptions {
     fn default() -> Self {
         Self {
             config: true,
@@ -86,51 +146,127 @@ impl Config {
         let content = fs::read_to_string(&path)
             .with_context(|| format!("Failed to read config file: {:?}", path.as_ref()))?;
 
-        // Get file extension
-        let extension = path
-            .as_ref()
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .unwrap_or("");
+        let mut config: Config = serde_yaml::from_str(&content)
+            .with_context(|| "Failed to parse config file as YAML")?;
 
-        // Parse based on file extension
-        let config: Config = match extension.to_lowercase().as_str() {
-            "yaml" | "yml" => serde_yaml::from_str(&content)
-                .with_context(|| "Failed to parse config file as YAML")?,
-            "toml" => {
-                toml::from_str(&content).with_context(|| "Failed to parse config file as TOML")?
+        for secondary in &mut config.secondary {
+            // Migrate deprecated config keys to new names (keep backwards compatibility).
+            if secondary.config_api_sync_options.is_none() && secondary.config_sync.is_some() {
+                warn!(
+                    "[{}] DEPRECATION WARNING: config_sync has been renamed to config_api_sync_options; please update your config file.",
+                    secondary.host
+                );
+                secondary.config_api_sync_options = secondary.config_sync.clone();
+            } else if secondary.config_api_sync_options.is_some() && secondary.config_sync.is_some()
+            {
+                warn!(
+                    "[{}] Found config_api_sync_options and deprecated config_sync. Ignoring config_sync.",
+                    secondary.host
+                );
             }
-            _ => {
-                return Err(anyhow::anyhow!(
-                    "Unsupported config file format. Use .yaml, .yml, or .toml"
-                ))
+
+            if secondary.teleporter_sync_options.is_none() && secondary.teleporter_options.is_some()
+            {
+                warn!(
+                    "[{}] DEPRECATION WARNING: teleporter_options has been renamed to teleporter_sync_options; please update your config file.",
+                    secondary.host
+                );
+                secondary.teleporter_sync_options = secondary.teleporter_options.clone();
+            } else if secondary.teleporter_sync_options.is_some()
+                && secondary.teleporter_options.is_some()
+            {
+                warn!(
+                    "[{}] Found teleporter_sync_options and deprecated teleporter_options. Ignoring teleporter_options.",
+                    secondary.host
+                );
             }
-        };
+
+            if secondary.import_options.is_some() {
+                warn!(
+                    "[{}] DEPRECATION WARNING: import_options has been renamed to teleporter_sync_options; this field will be removed in 1.0.0. Please update your config file.",
+                    secondary.host
+                );
+                if secondary.teleporter_sync_options.is_none() {
+                    secondary.teleporter_sync_options = secondary.import_options.clone();
+                } else {
+                    warn!(
+                        "[{}] Found import_options and teleporter_sync_options. Ignoring import_options.",
+                        secondary.host
+                    );
+                }
+            }
+
+            // Determine effective sync mode (backwards compatible).
+            let effective_mode = match secondary.sync_mode {
+                Some(mode) => mode,
+                None => {
+                    if secondary.config_api_sync_options.is_some() {
+                        SyncMode::ConfigApi
+                    } else {
+                        SyncMode::Teleporter
+                    }
+                }
+            };
+            secondary.sync_mode = Some(effective_mode);
+
+            if let Some(options) = secondary.config_api_sync_options.as_mut() {
+                if options.mode.is_none() {
+                    warn!(
+                        "[{}] config_api_sync_options.mode is not set; defaulting to \"include\"",
+                        secondary.host
+                    );
+                    options.mode = Some(ConfigApiSyncMode::Include);
+                }
+            }
+
+            match effective_mode {
+                SyncMode::ConfigApi => {
+                    if secondary.config_api_sync_options.is_none() {
+                        return Err(anyhow::anyhow!(
+                            "[{}] sync_mode is config_api but config_api_sync_options is missing",
+                            secondary.host
+                        ));
+                    }
+
+                    if secondary.teleporter_sync_options.is_some()
+                        || secondary.teleporter_options.is_some()
+                        || secondary.import_options.is_some()
+                    {
+                        warn!(
+                            "[{}] sync_mode is config_api; teleporter options are ignored",
+                            secondary.host
+                        );
+                    }
+                }
+                SyncMode::Teleporter => {
+                    if secondary.config_api_sync_options.is_some()
+                        || secondary.config_sync.is_some()
+                    {
+                        return Err(anyhow::anyhow!(
+                            "[{}] sync_mode is teleporter but config_api_sync_options is present; remove it or set sync_mode to config_api",
+                            secondary.host
+                        ));
+                    }
+
+                    if secondary.teleporter_sync_options.is_none() {
+                        secondary.teleporter_sync_options =
+                            Some(TeleporterImportOptions::default());
+                    }
+                }
+            }
+
+            // Clear deprecated fields after migration to avoid ambiguity.
+            secondary.config_sync = None;
+            secondary.teleporter_options = None;
+            secondary.import_options = None;
+        }
 
         Ok(config)
     }
 
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<()> {
-        // Get file extension
-        let extension = path
-            .as_ref()
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .unwrap_or("");
-
-        // Serialize based on file extension
         let content =
-            match extension.to_lowercase().as_str() {
-                "yaml" | "yml" => serde_yaml::to_string(self)
-                    .context("Failed to serialize configuration to YAML")?,
-                "toml" => toml::to_string_pretty(self)
-                    .context("Failed to serialize configuration to TOML")?,
-                _ => {
-                    return Err(anyhow::anyhow!(
-                        "Unsupported config file format. Use .yaml, .yml, or .toml"
-                    ))
-                }
-            };
+            serde_yaml::to_string(self).context("Failed to serialize configuration to YAML")?;
 
         fs::write(&path, content).context("Failed to write configuration file")?;
         Ok(())
