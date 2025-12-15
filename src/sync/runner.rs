@@ -2,6 +2,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Error, Result};
+use tokio::process::Command;
 use tracing::{error, info, warn};
 
 use crate::config::{Config, ConfigApiSyncMode, SyncMode, SyncTriggerMode};
@@ -160,6 +161,10 @@ pub async fn run_sync(config_path: &str, run_once: bool, disable_initial_sync: b
                 let secondaries = secondaries_clone.clone();
                 let backup = backup_path_clone.clone();
                 async move {
+                    if is_pihole_update_running().await? {
+                        warn!("Detected running \"pihole -up\"; skipping sync until update completes.");
+                        return Ok(());
+                    }
                     perform_sync(
                         &main,
                         &secondaries,
@@ -355,6 +360,39 @@ async fn logout_all(main: &PiHoleClient, secondaries: &[PiHoleClient]) {
                 "[{}] Failed to logout from secondary instance: {:?}",
                 secondary.config.host, e
             );
+        }
+    }
+}
+
+async fn is_pihole_update_running() -> Result<bool> {
+    let output = Command::new("pgrep")
+        .args(["-af", "pihole.*-up"])
+        .output()
+        .await;
+
+    match output {
+        Ok(out) => {
+            if out.status.success() {
+                let stdout_has_content = !out.stdout.is_empty();
+                return Ok(stdout_has_content);
+            }
+
+            // pgrep exits with 1 when no processes were matched; that's not an error for us.
+            if let Some(1) = out.status.code() {
+                return Ok(false);
+            }
+
+            warn!(
+                "pgrep returned non-zero status ({}). stdout: {:?}, stderr: {:?}",
+                out.status,
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            Ok(false)
+        }
+        Err(e) => {
+            warn!("Failed to run pgrep to detect \"pihole -up\": {}", e);
+            Ok(false)
         }
     }
 }
