@@ -146,6 +146,18 @@ impl Config {
         let content = fs::read_to_string(&path)
             .with_context(|| format!("Failed to read config file: {:?}", path.as_ref()))?;
 
+        if path
+            .as_ref()
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.eq_ignore_ascii_case("toml"))
+            .unwrap_or(false)
+        {
+            return Err(anyhow::anyhow!(
+                "TOML configs are no longer supported. Please migrate to YAML (e.g. config.yaml)."
+            ));
+        }
+
         let mut config: Config = serde_yaml::from_str(&content)
             .with_context(|| "Failed to parse config file as YAML")?;
 
