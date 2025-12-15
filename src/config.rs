@@ -20,6 +20,7 @@ pub enum SyncTriggerMode {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SyncConfig {
+    #[serde(default = "default_interval_minutes")]
     pub interval: u64,
     pub cache_location: String,
     #[serde(default = "default_trigger_mode")]
@@ -110,6 +111,10 @@ fn default_trigger_mode() -> SyncTriggerMode {
 
 fn default_pihole_config_path() -> String {
     "/etc/pihole/pihole.toml".to_string()
+}
+
+fn default_interval_minutes() -> u64 {
+    60
 }
 
 impl Default for TeleporterImportOptions {
