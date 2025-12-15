@@ -80,6 +80,30 @@ impl Cli {
                     once,
                     no_initial_sync,
                 } => {
+                    let has_teleporter_secondaries = config.secondary.iter().any(|secondary| {
+                        matches!(
+                            secondary.sync_mode,
+                            Some(crate::config::SyncMode::Teleporter) | None
+                        )
+                    });
+                    if has_teleporter_secondaries
+                        && matches!(
+                            config.sync.trigger_mode,
+                            crate::config::SyncTriggerMode::WatchConfigFile
+                                | crate::config::SyncTriggerMode::WatchConfigApi
+                        )
+                    {
+                        let trigger_mode = match config.sync.trigger_mode {
+                            crate::config::SyncTriggerMode::WatchConfigFile => "watch_config_file",
+                            crate::config::SyncTriggerMode::WatchConfigApi => "watch_config_api",
+                            _ => "interval",
+                        };
+                        warn!(
+                            "Teleporter imports temporarily make the target Pi-hole unresponsive. Using sync mode {} with teleporter is not recommended; frequent config changes can leave secondary Pi-holes unresponsive for significant periods.",
+                            trigger_mode
+                        );
+                    }
+
                     run_sync(config_path_str, once, no_initial_sync).await?;
                 }
 

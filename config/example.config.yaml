@@ -48,6 +48,9 @@ secondary:
     sync_mode: teleporter
     # Sync includes as described in https://ftl.pi-hole.net/master/docs/#post-/teleporter
     # Omitted entries are validated as true
+    # Attention: The Teleporter import causes the target Pi-hole to be unresponsive for quire some time.
+    # Be careful when using this feature with config-based triggers like watch_config_file or watch_config_api
+    # Frequent config changes may cause the target Pi-hole to become unresponsive for a longer period of time.
     teleporter_sync_options:
       # This syncs the *COMPLETE* config (teleporter mode only; ignored in config_api mode)
       config: true
