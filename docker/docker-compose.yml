@@ -1,4 +1,4 @@
-version: '3'
+version: "3"
 
 services:
   piholesync:
@@ -10,6 +10,10 @@ services:
       - piholesync-config:/etc/pihole-sync
     environment:
       - RUST_LOG=info
+      # Sync trigger options
+      - SYNC_TRIGGER_MODE=interval # interval | watch_config_file | watch_config_api
+      - SYNC_CONFIG_PATH=/etc/pihole/pihole.toml
+      - SYNC_API_POLL_INTERVAL=5
       - MAIN_HOST=main-pihole.example.com
       - MAIN_SCHEMA=https
       - MAIN_PORT=443
@@ -19,4 +23,8 @@ services:
       - SECONDARY_PORT_1=443
       - SECONDARY_API_KEY_1=YOUR_SECONDARY_PIHOLE_APP_PASSWORD
       - SECONDARY_UPDATE_GRAVITY_1=true
+      # Optional per-secondary sync mode and filters
+      - SECONDARY_SYNC_MODE_1=config_api # teleporter | config_api
+      - SECONDARY_CONFIG_MODE_1=include # include | exclude
+      - SECONDARY_FILTER_KEYS_1=dns.upstreams,webserver.session.timeout
       - SYNC_INTERVAL=60
