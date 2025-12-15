@@ -88,7 +88,7 @@ async fn watch_config_api_triggers_on_change() -> Result<()> {
 
     let baseline_hash = Some(hash_config(&config1)?);
 
-    let watcher = tokio::spawn(watch_config_api_with_fetch(
+    let watcher = tokio::spawn(watch_config_api(
         Duration::from_millis(50),
         baseline_hash,
         move || {

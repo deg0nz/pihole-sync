@@ -1,15 +1,17 @@
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Error, Result};
-use tokio::process::Command;
+use anyhow::Result;
+use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
 use crate::config::{Config, ConfigApiSyncMode, SyncMode, SyncTriggerMode};
 use crate::pihole::client::PiHoleClient;
 use crate::pihole::config_filter::{ConfigFilter, FilterMode};
-use crate::sync::triggers::{run_interval_mode, watch_config_api_main, watch_config_file};
-use crate::sync::util::hash_config;
+use crate::sync::triggers::{run_interval_mode, watch_config_api, watch_config_file};
+use crate::sync::util::{filtered_config_has_changed, hash_config, is_pihole_update_running};
 
 pub async fn run_sync(config_path: &str, run_once: bool, disable_initial_sync: bool) -> Result<()> {
     // Load config
@@ -43,6 +45,8 @@ pub async fn run_sync(config_path: &str, run_once: bool, disable_initial_sync: b
         .any(|secondary| matches!(secondary.config.sync_mode, Some(SyncMode::ConfigApi)));
 
     let backup_path = Path::new(&config.sync.cache_location).join("pihole_backup.zip");
+    let last_filtered_config_hashes: Arc<Mutex<HashMap<String, u64>>> =
+        Arc::new(Mutex::new(HashMap::new()));
 
     if has_teleporter_secondaries {
         // Check cache directory (teleporter ZIP)
@@ -65,13 +69,14 @@ pub async fn run_sync(config_path: &str, run_once: bool, disable_initial_sync: b
     info!("Running in sync mode...");
 
     if run_once {
-        info!("Mode: run-once (no watcher).");
+        info!("Sync trigger mode: run-once (no watcher).");
         perform_sync(
             &main_pihole,
             &secondary_piholes,
             &backup_path,
             has_teleporter_secondaries,
             has_config_api_secondaries,
+            &last_filtered_config_hashes,
             None,
         )
         .await?;
@@ -88,6 +93,7 @@ pub async fn run_sync(config_path: &str, run_once: bool, disable_initial_sync: b
             &backup_path,
             has_teleporter_secondaries,
             has_config_api_secondaries,
+            &last_filtered_config_hashes,
             None,
         )
         .await?;
@@ -120,8 +126,9 @@ pub async fn run_sync(config_path: &str, run_once: bool, disable_initial_sync: b
             let main_clone = main_pihole.clone();
             let secondaries_clone = secondary_piholes.clone();
             let backup_clone = backup_path.clone();
+            let last_filtered_hashes_clone = last_filtered_config_hashes.clone();
             info!(
-                "Mode: interval. Running every {} minute(s).",
+                "Sync trigger mode: interval. Running every {} minute(s).",
                 sync_interval.as_secs() / 60
             );
             run_interval_mode(
@@ -130,6 +137,7 @@ pub async fn run_sync(config_path: &str, run_once: bool, disable_initial_sync: b
                     let main = main_clone.clone();
                     let secondaries = secondaries_clone.clone();
                     let backup = backup_clone.clone();
+                    let hashes = last_filtered_hashes_clone.clone();
                     async move {
                         perform_sync(
                             &main,
@@ -137,6 +145,7 @@ pub async fn run_sync(config_path: &str, run_once: bool, disable_initial_sync: b
                             &backup,
                             has_teleporter_secondaries,
                             has_config_api_secondaries,
+                            &hashes,
                             None,
                         )
                         .await?;
@@ -152,14 +161,16 @@ pub async fn run_sync(config_path: &str, run_once: bool, disable_initial_sync: b
             let main_clone = main_pihole.clone();
             let secondaries_clone = secondary_piholes.clone();
             let backup_path_clone = backup_path.clone();
+            let last_filtered_hashes_clone = last_filtered_config_hashes.clone();
             info!(
-                "Mode: watch_config_file. Watching {}.",
+                "Sync trigger mode: watch_config_file. Watching {}.",
                 config_watch_path.display()
             );
             watch_config_file(&config_watch_path, move || {
                 let main = main_clone.clone();
                 let secondaries = secondaries_clone.clone();
                 let backup = backup_path_clone.clone();
+                let hashes = last_filtered_hashes_clone.clone();
                 async move {
                     if is_pihole_update_running().await? {
                         warn!("Detected running \"pihole -up\"; skipping sync until update completes.");
@@ -171,6 +182,7 @@ pub async fn run_sync(config_path: &str, run_once: bool, disable_initial_sync: b
                         &backup,
                         has_teleporter_secondaries,
                         has_config_api_secondaries,
+                        &hashes,
                         None,
                     )
                     .await?;
@@ -181,21 +193,27 @@ pub async fn run_sync(config_path: &str, run_once: bool, disable_initial_sync: b
             .await?;
         }
         SyncTriggerMode::WatchConfigApi => {
+            let main_for_fetch = main_pihole.clone();
             let main_for_sync = main_pihole.clone();
             let secondaries_clone = secondary_piholes.clone();
             let backup_path_clone = backup_path.clone();
+            let last_filtered_hashes_clone = last_filtered_config_hashes.clone();
             info!(
-                "Mode: watch_config_api. Polling every {} minute(s).",
+                "Sync trigger mode: watch_config_api. Polling every {} minute(s).",
                 api_poll_interval.as_secs() / 60
             );
-            watch_config_api_main(
-                main_pihole.clone(),
+            watch_config_api(
                 api_poll_interval,
                 last_main_config_hash,
+                move || {
+                    let main = main_for_fetch.clone();
+                    async move { main.get_config().await }
+                },
                 move |main_config| {
                     let main = main_for_sync.clone();
                     let secondaries = secondaries_clone.clone();
                     let backup = backup_path_clone.clone();
+                    let hashes = last_filtered_hashes_clone.clone();
                     async move {
                         perform_sync(
                             &main,
@@ -203,6 +221,7 @@ pub async fn run_sync(config_path: &str, run_once: bool, disable_initial_sync: b
                             &backup,
                             has_teleporter_secondaries,
                             has_config_api_secondaries,
+                            &hashes,
                             Some(main_config),
                         )
                         .await?;
@@ -218,33 +237,13 @@ pub async fn run_sync(config_path: &str, run_once: bool, disable_initial_sync: b
     Ok(())
 }
 
-async fn sync_pihole_config_filtered(
-    main_config: &serde_json::Value,
-    secondary: &PiHoleClient,
-) -> Result<(), Error> {
-    if let Some(config_sync) = secondary.config.config_api_sync_options.clone() {
-        let filter_mode = match config_sync.mode.unwrap_or(ConfigApiSyncMode::Include) {
-            ConfigApiSyncMode::Include => FilterMode::OptIn,
-            ConfigApiSyncMode::Exclude => FilterMode::OptOut,
-        };
-
-        let filter = ConfigFilter::new(&config_sync.filter_keys, filter_mode);
-        let filtered_config = filter.filter_json(main_config.clone());
-
-        secondary
-            .patch_config_and_wait_for_ftl_readiness(filtered_config)
-            .await?;
-    }
-
-    Ok(())
-}
-
 async fn perform_sync(
     main_pihole: &PiHoleClient,
     secondary_piholes: &[PiHoleClient],
     backup_path: &Path,
     has_teleporter_secondaries: bool,
     has_config_api_secondaries: bool,
+    last_filtered_config_hashes: &Arc<Mutex<HashMap<String, u64>>>,
     provided_main_config: Option<serde_json::Value>,
 ) -> Result<Option<serde_json::Value>> {
     let mut main_config_used = provided_main_config;
@@ -254,7 +253,13 @@ async fn perform_sync(
     }
 
     if has_config_api_secondaries {
-        main_config_used = sync_config_api(main_pihole, secondary_piholes, main_config_used).await;
+        main_config_used = sync_config_api(
+            main_pihole,
+            secondary_piholes,
+            main_config_used,
+            last_filtered_config_hashes,
+        )
+        .await;
     }
 
     Ok(main_config_used)
@@ -307,6 +312,7 @@ async fn sync_config_api(
     main_pihole: &PiHoleClient,
     secondary_piholes: &[PiHoleClient],
     mut main_config_used: Option<serde_json::Value>,
+    last_filtered_config_hashes: &Arc<Mutex<HashMap<String, u64>>>,
 ) -> Option<serde_json::Value> {
     if main_config_used.is_none() {
         match main_pihole.get_config().await {
@@ -326,8 +332,45 @@ async fn sync_config_api(
                 continue;
             }
 
-            info!("[{}] Syncing config via API", secondary_pihole.config.host);
-            if let Err(e) = sync_pihole_config_filtered(main_config, secondary_pihole).await {
+            let Some(config_sync) = secondary_pihole.config.config_api_sync_options.clone() else {
+                continue;
+            };
+
+            let filter_mode = match config_sync.mode.unwrap_or(ConfigApiSyncMode::Include) {
+                ConfigApiSyncMode::Include => FilterMode::OptIn,
+                ConfigApiSyncMode::Exclude => FilterMode::OptOut,
+            };
+
+            let filter = ConfigFilter::new(&config_sync.filter_keys, filter_mode);
+            let filtered_config = filter.filter_json(main_config.clone());
+            let host_key = secondary_pihole.config.host.clone();
+
+            let filtered_hash = match hash_config(&filtered_config) {
+                Ok(hash) => hash,
+                Err(e) => {
+                    error!(
+                        "[{}] Failed to hash filtered config: {:?}",
+                        secondary_pihole.config.host, e
+                    );
+                    continue;
+                }
+            };
+
+            if !filtered_config_has_changed(&host_key, filtered_hash, last_filtered_config_hashes)
+                .await
+            {
+                info!(
+                    "[{}] Skipping config_api sync; filtered config unchanged since last run",
+                    host_key
+                );
+                continue;
+            }
+
+            info!("[{}] Syncing config via API", host_key);
+            if let Err(e) = secondary_pihole
+                .patch_config_and_wait_for_ftl_readiness(filtered_config.clone())
+                .await
+            {
                 error!("{}", e);
                 continue;
             }
@@ -341,6 +384,9 @@ async fn sync_config_api(
                     );
                 }
             }
+
+            let mut hashes = last_filtered_config_hashes.lock().await;
+            hashes.insert(host_key, filtered_hash);
         }
     }
 
@@ -360,39 +406,6 @@ async fn logout_all(main: &PiHoleClient, secondaries: &[PiHoleClient]) {
                 "[{}] Failed to logout from secondary instance: {:?}",
                 secondary.config.host, e
             );
-        }
-    }
-}
-
-async fn is_pihole_update_running() -> Result<bool> {
-    let output = Command::new("pgrep")
-        .args(["-af", "pihole.*-up"])
-        .output()
-        .await;
-
-    match output {
-        Ok(out) => {
-            if out.status.success() {
-                let stdout_has_content = !out.stdout.is_empty();
-                return Ok(stdout_has_content);
-            }
-
-            // pgrep exits with 1 when no processes were matched; that's not an error for us.
-            if let Some(1) = out.status.code() {
-                return Ok(false);
-            }
-
-            warn!(
-                "pgrep returned non-zero status ({}). stdout: {:?}, stderr: {:?}",
-                out.status,
-                String::from_utf8_lossy(&out.stdout),
-                String::from_utf8_lossy(&out.stderr)
-            );
-            Ok(false)
-        }
-        Err(e) => {
-            warn!("Failed to run pgrep to detect \"pihole -up\": {}", e);
-            Ok(false)
         }
     }
 }

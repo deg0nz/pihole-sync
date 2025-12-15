@@ -9,7 +9,7 @@ use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::{sync::mpsc, time::sleep};
 use tracing::{debug, info, warn};
 
-use crate::sync::util::FILE_WATCH_DEBOUNCE;
+use crate::sync::util::{hash_config, FILE_WATCH_DEBOUNCE};
 
 pub async fn run_interval_mode<F, Fut>(
     sync_interval: Duration,
@@ -121,29 +121,7 @@ where
     Ok(())
 }
 
-pub async fn watch_config_api_main<F, Fut>(
-    main: crate::pihole::client::PiHoleClient,
-    poll_interval: Duration,
-    last_main_config_hash: Option<u64>,
-    on_change: F,
-) -> Result<()>
-where
-    F: FnMut(serde_json::Value) -> Fut + Send + 'static,
-    Fut: Future<Output = Result<()>> + Send,
-{
-    watch_config_api_with_fetch(
-        poll_interval,
-        last_main_config_hash,
-        move || {
-            let main_clone = main.clone();
-            async move { main_clone.get_config().await }
-        },
-        on_change,
-    )
-    .await
-}
-
-pub(crate) async fn watch_config_api_with_fetch<F, Fut, G, GFut>(
+pub async fn watch_config_api<F, Fut, G, GFut>(
     poll_interval: Duration,
     last_main_config_hash: Option<u64>,
     fetch_config: G,
@@ -162,7 +140,7 @@ where
     loop {
         sleep(poll_interval).await;
         match fetch_config().await {
-            Ok(main_config) => match crate::sync::util::hash_config(&main_config) {
+            Ok(main_config) => match hash_config(&main_config) {
                 Ok(current_hash) => {
                     if last_main_config_hash.map_or(true, |prev| prev != current_hash) {
                         info!(
