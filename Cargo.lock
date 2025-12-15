@@ -1577,7 +1577,7 @@ checksum = "e3148f5046208a5d56bcfc03053e3ca6334e51da8dfb19b6cdc8b306fae3283e"
 
 [[package]]
 name = "pihole-sync"
-version = "1.0.0-alpha.0"
+version = "1.0.0-beta.1"
 dependencies = [
  "anyhow",
  "clap",
