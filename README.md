@@ -4,6 +4,15 @@ A (currently) quick and dirty utility to sync your *Pi-hole v6* configuration to
 
 The sync goes one-to-many. One main instance is specified and it's configuration is distributed to all other (secondary) instances.
 
+> **1.0.0-beta announcement (main branch)**
+> - Per-secondary sync mode choice: Teleporter or Config API (with include/exclude filters).
+> - New sync triggers: interval, watch Pi-hole config file, or watch `/api/config` with polling.
+> - Watch-mode guard: skip sync while `pihole -up` is running.
+> - Config is YAML-only; TOML configs are no longer supported.
+>
+> See the 1.0.0-beta.1 release: https://github.com/deg0nz/pihole-sync/releases/tag/1.0.0-beta.1
+> For fuller docs, check the README on the development branch.
+
 ## Features
 
 - Syncs everything contained in Pi-hole's Teleporter backups
