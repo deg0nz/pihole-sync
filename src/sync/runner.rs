@@ -11,7 +11,7 @@ use crate::config::{Config, ConfigApiSyncMode, SyncMode, SyncTriggerMode};
 use crate::pihole::client::PiHoleClient;
 use crate::pihole::config_filter::{ConfigFilter, FilterMode};
 use crate::sync::triggers::{run_interval_mode, watch_config_api, watch_config_file};
-use crate::sync::util::{filtered_config_has_changed, hash_config, is_pihole_update_running};
+use crate::sync::util::{config_has_changed, hash_config, is_pihole_update_running};
 
 pub async fn run_sync(config_path: &str, run_once: bool, disable_initial_sync: bool) -> Result<()> {
     // Load config
@@ -356,9 +356,7 @@ async fn sync_config_api(
                 }
             };
 
-            if !filtered_config_has_changed(&host_key, filtered_hash, last_filtered_config_hashes)
-                .await
-            {
+            if !config_has_changed(&host_key, filtered_hash, last_filtered_config_hashes).await {
                 info!(
                     "[{}] Skipping config_api sync; filtered config unchanged since last run",
                     host_key
