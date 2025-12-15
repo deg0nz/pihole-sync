@@ -4,7 +4,7 @@ A (currently) quick and dirty utility to sync your *Pi-hole v6* configuration to
 
 The sync goes one-to-many. One main instance is specified and it's configuration is distributed to all other (secondary) instances.
 
-> **1.0.0-beta announcement (main branch)**
+> **1.0.0-beta announcement**
 > - Per-secondary sync mode choice: Teleporter or Config API (with include/exclude filters).
 > - New sync triggers: interval, watch Pi-hole config file, or watch `/api/config` with polling.
 > - Watch-mode guard: skip sync while `pihole -up` is running.
