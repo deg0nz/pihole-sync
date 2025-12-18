@@ -138,7 +138,7 @@ fn write_test_config(
 }
 
 #[tokio::test()]
-async fn config_api_selective_sync_include_and_exclude() -> Result<()> {
+async fn e2e_config_api_selective_sync_include_and_exclude() -> Result<()> {
     common::init_logging();
     ensure_docker_host()?;
     run_include_mode().await?;
