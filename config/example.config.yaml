@@ -26,19 +26,23 @@ secondary:
     update_gravity: true
     # Select sync mechanism (mutually exclusive per secondary)
     # - teleporter: sync via Pi-hole teleporter endpoint (/teleporter)
-    # - config_api: sync via config endpoint (/config) using `config_api_sync_options` filters
-    # If omitted, `config_api_sync_options` implies config_api for backwards compatibility.
-    sync_mode: config_api
-    config_api_sync_options:
-      # If omitted, defaults to include with a warning
-      mode: include
-      # List of keys/paths to include or exclude
-      # All children of a given key will be included/excluded
-      filter_keys:
-        - "dns.cnameRecords"
-        - "dns.hosts"
-        - "dns.upstreams"
-        - "webserver.session.timeout"
+    # - api: sync via Pi-hole API endpoints (/config, /groups, /lists)
+    # If omitted, `api_sync_options` implies api for backwards compatibility.
+    sync_mode: api
+    api_sync_options:
+      sync_config:
+        # If omitted, defaults to include with a warning
+        mode: include
+        # List of keys/paths to include or exclude
+        # All children of a given key will be included/excluded
+        filter_keys:
+          - "dns.cnameRecords"
+          - "dns.hosts"
+          - "dns.upstreams"
+          - "webserver.session.timeout"
+      # Enable syncing of groups and lists (defaults to disabled)
+      sync_groups: false
+      sync_lists: false
 
   - host: secondary-pihole-2.example.com
     schema: https

@@ -7,7 +7,8 @@ use tracing::warn;
 #[serde(rename_all = "snake_case")]
 pub enum SyncMode {
     Teleporter,
-    ConfigApi,
+    #[serde(alias = "config_api")]
+    Api,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -41,6 +42,8 @@ pub struct InstanceConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sync_mode: Option<SyncMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_sync_options: Option<ApiSyncOptions>,
+    #[serde(default, skip_serializing_if = "Option::is_none", skip_serializing)]
     pub config_api_sync_options: Option<ConfigSyncOptions>,
     #[serde(default, skip_serializing_if = "Option::is_none", skip_serializing)]
     pub config_sync: Option<ConfigSyncOptions>,
@@ -57,6 +60,21 @@ pub struct ConfigSyncOptions {
     #[serde(default)]
     pub mode: Option<ConfigApiSyncMode>,
     pub filter_keys: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ApiSyncOptions {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "config",
+        alias = "config"
+    )]
+    pub sync_config: Option<ConfigSyncOptions>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync_groups: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync_lists: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -165,14 +183,32 @@ impl Config {
             // Migrate deprecated config keys to new names (keep backwards compatibility).
             if secondary.config_api_sync_options.is_none() && secondary.config_sync.is_some() {
                 warn!(
-                    "[{}] DEPRECATION WARNING: config_sync has been renamed to config_api_sync_options; please update your config file.",
+                    "[{}] DEPRECATION WARNING: config_sync has been renamed to api_sync_options.config; please update your config file.",
                     secondary.host
                 );
                 secondary.config_api_sync_options = secondary.config_sync.clone();
             } else if secondary.config_api_sync_options.is_some() && secondary.config_sync.is_some()
             {
                 warn!(
-                    "[{}] Found config_api_sync_options and deprecated config_sync. Ignoring config_sync.",
+                    "[{}] Found api_sync_options.config (config_api_sync_options) and deprecated config_sync. Ignoring config_sync.",
+                    secondary.host
+                );
+            }
+
+            if secondary.api_sync_options.is_none() && secondary.config_api_sync_options.is_some() {
+                warn!(
+                    "[{}] DEPRECATION WARNING: config_api_sync_options has been renamed to api_sync_options.sync_config; please update your config file.",
+                    secondary.host
+                );
+                secondary.api_sync_options = Some(ApiSyncOptions {
+                    sync_config: secondary.config_api_sync_options.clone(),
+                    ..ApiSyncOptions::default()
+                });
+            } else if secondary.api_sync_options.is_some()
+                && secondary.config_api_sync_options.is_some()
+            {
+                warn!(
+                    "[{}] Found api_sync_options and deprecated config_api_sync_options. Ignoring config_api_sync_options.",
                     secondary.host
                 );
             }
@@ -212,8 +248,8 @@ impl Config {
             let effective_mode = match secondary.sync_mode {
                 Some(mode) => mode,
                 None => {
-                    if secondary.config_api_sync_options.is_some() {
-                        SyncMode::ConfigApi
+                    if secondary.api_sync_options.is_some() {
+                        SyncMode::Api
                     } else {
                         SyncMode::Teleporter
                     }
@@ -221,21 +257,23 @@ impl Config {
             };
             secondary.sync_mode = Some(effective_mode);
 
-            if let Some(options) = secondary.config_api_sync_options.as_mut() {
-                if options.mode.is_none() {
-                    warn!(
-                        "[{}] config_api_sync_options.mode is not set; defaulting to \"include\"",
-                        secondary.host
-                    );
-                    options.mode = Some(ConfigApiSyncMode::Include);
+            if let Some(options) = secondary.api_sync_options.as_mut() {
+                if let Some(config_opts) = options.sync_config.as_mut() {
+                    if config_opts.mode.is_none() {
+                        warn!(
+                            "[{}] api_sync_options.sync_config.mode is not set; defaulting to \"include\"",
+                            secondary.host
+                        );
+                        config_opts.mode = Some(ConfigApiSyncMode::Include);
+                    }
                 }
             }
 
             match effective_mode {
-                SyncMode::ConfigApi => {
-                    if secondary.config_api_sync_options.is_none() {
+                SyncMode::Api => {
+                    if secondary.api_sync_options.is_none() {
                         return Err(anyhow::anyhow!(
-                            "[{}] sync_mode is config_api but config_api_sync_options is missing",
+                            "[{}] sync_mode is api but api_sync_options is missing",
                             secondary.host
                         ));
                     }
@@ -245,17 +283,15 @@ impl Config {
                         || secondary.import_options.is_some()
                     {
                         warn!(
-                            "[{}] sync_mode is config_api; teleporter options are ignored",
+                            "[{}] sync_mode is api; teleporter options are ignored",
                             secondary.host
                         );
                     }
                 }
                 SyncMode::Teleporter => {
-                    if secondary.config_api_sync_options.is_some()
-                        || secondary.config_sync.is_some()
-                    {
+                    if secondary.api_sync_options.is_some() || secondary.config_sync.is_some() {
                         return Err(anyhow::anyhow!(
-                            "[{}] sync_mode is teleporter but config_api_sync_options is present; remove it or set sync_mode to config_api",
+                            "[{}] sync_mode is teleporter but api_sync_options is present; remove it or set sync_mode to api",
                             secondary.host
                         ));
                     }
@@ -269,6 +305,7 @@ impl Config {
 
             // Clear deprecated fields after migration to avoid ambiguity.
             secondary.config_sync = None;
+            secondary.config_api_sync_options = None;
             secondary.teleporter_options = None;
             secondary.import_options = None;
         }

@@ -63,6 +63,7 @@ pub fn run_instances_cmd(
                 schema,
                 port,
                 api_key,
+                api_sync_options: None,
                 config_api_sync_options: None,
                 config_sync: None,
                 update_gravity: Some(update_gravity),
