@@ -1,15 +1,17 @@
 mod app_password;
 mod instances;
+mod setup;
 
 use std::path::Path;
 
 use crate::config::Config;
 use crate::sync::run_sync;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use app_password::acquire_app_password;
 use clap::{Parser, Subcommand};
 use instances::{run_instances_cmd, Instances};
+use setup::{create_default_config, create_systemd_service};
 use tracing::{info, warn};
 
 #[derive(Parser)]
@@ -43,8 +45,22 @@ enum Commands {
     /// Acquire an app password for a Pi-hole instance
     AppPassword,
 
+    /// Create helper files
+    Setup {
+        #[command(subcommand)]
+        command: SetupCommands,
+    },
+
     #[command(subcommand)]
     Instances(Instances),
+}
+
+#[derive(Subcommand)]
+enum SetupCommands {
+    /// Create a default config.yaml in the current directory
+    DefaultConfig,
+    /// Create a systemd service file for the current directory
+    Systemd,
 }
 
 impl Cli {
@@ -56,24 +72,30 @@ impl Cli {
             return Ok(());
         }
 
-        let mut config_path_str = "";
-
-        let config_path_yaml = Path::new("/etc/pihole-sync/config.yaml");
-
-        if config_path_yaml.exists() {
-            config_path_str = config_path_yaml.to_str().unwrap();
+        if let Some(command) = &cli.command {
+            match command {
+                Commands::Setup {
+                    command: SetupCommands::DefaultConfig,
+                } => {
+                    create_default_config()?;
+                    return Ok(());
+                }
+                Commands::Setup {
+                    command: SetupCommands::Systemd,
+                } => {
+                    create_systemd_service()?;
+                    return Ok(());
+                }
+                _ => {}
+            }
         }
 
-        if let Some(config_path_cli) = &cli.config {
-            config_path_str = config_path_cli;
-        } else if config_path_str.is_empty() {
-            panic!("No default config found and --config not specified. Please create a default YAML config file (/etc/pihole-sync/config.yaml) or use the --config flag.")
-        }
+        let config_path_str = Self::resolve_config_path(cli.config.as_deref())?;
 
         info!("Using config: {}", config_path_str);
 
         if let Some(command) = cli.command {
-            let mut config = Config::load(config_path_str)?;
+            let mut config = Config::load(&config_path_str)?;
 
             match command {
                 Commands::Sync {
@@ -104,16 +126,18 @@ impl Cli {
                         );
                     }
 
-                    run_sync(config_path_str, once, no_initial_sync).await?;
+                    run_sync(&config_path_str, once, no_initial_sync).await?;
                 }
 
                 Commands::AppPassword => {
-                    acquire_app_password(config_path_str).await?;
+                    acquire_app_password(&config_path_str).await?;
                 }
 
                 Commands::Instances(instances_cmd) => {
-                    run_instances_cmd(instances_cmd, &mut config, config_path_str)?;
+                    run_instances_cmd(instances_cmd, &mut config, &config_path_str)?;
                 }
+
+                Commands::Setup { .. } => unreachable!("Setup commands handled earlier"),
             }
             return Ok(()); // Exit after CLI command execution
         } else {
@@ -121,5 +145,23 @@ impl Cli {
         }
 
         Ok(())
+    }
+
+    fn resolve_config_path(config_path_cli: Option<&str>) -> Result<String> {
+        if let Some(config_path_cli) = config_path_cli {
+            return Ok(config_path_cli.to_string());
+        }
+
+        let config_path_yaml = Path::new("/etc/pihole-sync/config.yaml");
+
+        if config_path_yaml.exists() {
+            if let Some(path_str) = config_path_yaml.to_str() {
+                return Ok(path_str.to_string());
+            }
+        }
+
+        Err(anyhow!(
+            "No default config found and --config not specified. Please create a default YAML config file (/etc/pihole-sync/config.yaml) or use the --config flag."
+        ))
     }
 }
