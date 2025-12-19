@@ -102,7 +102,16 @@ pub fn create_systemd_service() -> Result<()> {
     fs::write(&service_path, service_contents)?;
     println!("Systemd service file written to {}", service_path.display());
     if install {
-        println!("Enable with: sudo systemctl enable --now pihole-sync.service");
+        let service_name = service_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("pihole-sync.service");
+
+        println!("");
+        println!("Next steps to activate the service:");
+        println!("  sudo systemctl daemon-reload");
+        println!("  sudo systemctl start {}", service_name);
+        println!("  sudo systemctl enable {}", service_name);
     }
 
     Ok(())
