@@ -22,7 +22,7 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             archive-name: pihole-sync-x86_64-linux.tar.gz
           - target: aarch64-unknown-linux-gnu
-            archive-name: pihole-sync-arm64-linux.tar.gz
+            archive-name: pihole-sync-aarch64-linux.tar.gz
           - target: armv7-unknown-linux-gnueabihf
             archive-name: pihole-sync-armv7-linux.tar.gz
 
@@ -70,7 +70,7 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             archive-name: pihole-sync-x86_64-linux.tar.gz
           - target: aarch64-unknown-linux-gnu
-            archive-name: pihole-sync-arm64-linux.tar.gz
+            archive-name: pihole-sync-aarch64-linux.tar.gz
           - target: armv7-unknown-linux-gnueabihf
             archive-name: pihole-sync-armv7-linux.tar.gz
 
