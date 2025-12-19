@@ -3,8 +3,6 @@
 A (currently) quick and dirty utility to sync your *Pi-hole v6* configuration to multiple Pi-hole instances.
 The sync goes one-to-many. One main instance is specified and it's configuration is distributed to all other (secondary) instances.
 
-> Warning: Config and API are considered *unstable* until v1.0.0 and may change at any time
-
 ## Features
 
 - Syncs everything contained in Pi-hole's Teleporter backups
@@ -12,6 +10,7 @@ The sync goes one-to-many. One main instance is specified and it's configuration
 - Supports interval-based syncs, watching the Pi-hole config file, or polling `/api/config` for changes
 - Acquire app passwords for Pi-hole API
 - Modify and add Pi-hole instances via CLI
+- Scaffold helper files with `pihole-sync setup default-config` (writes `./config.yaml`) and `pihole-sync setup systemd` (dialog to generate/install a systemd unit)
 
 ## Installation
 
@@ -31,6 +30,10 @@ cargo build --release
 > Note: Config file schema is YAML. TOML configs are no longer supported.
 
 The default config location is `/etc/pihole-sync/config.yaml`; use `--config /path/to/config.yaml` via CLI if you don't use the default path.
+
+- Quick-start helpers:
+  - `pihole-sync setup default-config` creates `./config.yaml` from the bundled example (asks before overwriting).
+  - `pihole-sync setup systemd` walks you through executable/config paths, writes the unit (default `/etc/systemd/system/pihole-sync.service`), and prints the `systemctl daemon-reload/start/enable` steps.
 
 - Configure your main and secondary instances in the YAML configuration file. (Please [refer to example config](./config/example.config.yaml))
   - Leave the password free for now. You can generate one via the CLI command `pihole-sync app-password` (add `--config /path/to/config.yaml` if you don't use the default path ;))
