@@ -14,8 +14,25 @@ The sync goes one-to-many. One main instance is specified and it's configuration
 
 ## Installation
 
-I'm trying to provide pre-compiled binaries in the near future.
-But for the time being, installation is only available via `git clone` and `cargo build`, so to install, run the following commands:
+### Pre-built binaries (recommended)
+
+Grab the latest release from [GitHub releases](https://github.com/deg0nz/pihole-sync/releases). Example for Linux (adjust the archive name for your OS/arch):
+
+```bash
+arch="$(uname -m)"
+curl -L "https://github.com/deg0nz/pihole-sync/releases/latest/download/pihole-sync-${arch}-unknown-linux-gnu.tar.gz" -o pihole-sync.tar.gz
+tar -xzf pihole-sync.tar.gz
+sudo mv pihole-sync /usr/local/bin/
+```
+
+Then scaffold helper files (optional):
+
+```bash
+pihole-sync setup default-config   # writes ./config.yaml (asks before overwrite)
+pihole-sync setup systemd          # dialog to create/install systemd unit
+```
+
+### Build from source
 
 ```bash
 git clone https://github.com/deg0nz/pihole-sync.git
