@@ -2,13 +2,16 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use serde::Serialize;
 use tokio::{process::Command, sync::Mutex};
 use tracing::warn;
 
-pub const FILE_WATCH_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(750);
+pub const FILE_WATCH_DEBOUNCE: Duration = Duration::from_millis(750);
+// Pi-hole doesn't expose rate-limit settings; throttle writes to stay well below typical defaults.
+pub const API_WRITE_THROTTLE: Duration = Duration::from_millis(250);
 
 pub fn hash_config(config: &serde_json::Value) -> Result<u64> {
     hash_value(config)
