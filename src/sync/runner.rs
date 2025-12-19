@@ -1,17 +1,19 @@
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use tokio::sync::Mutex;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::config::{Config, ConfigApiSyncMode, SyncMode, SyncTriggerMode};
-use crate::pihole::client::PiHoleClient;
+use crate::pihole::client::{Group, List, PiHoleClient};
 use crate::pihole::config_filter::{ConfigFilter, FilterMode};
 use crate::sync::triggers::{run_interval_mode, watch_config_api, watch_config_file};
-use crate::sync::util::{filtered_config_has_changed, hash_config, is_pihole_update_running};
+use crate::sync::util::{hash_config, hash_value, is_pihole_update_running, HashTracker};
+use tokio::time::sleep;
+
+// Pi-hole doesn't expose rate-limit settings; throttle writes to stay well below typical defaults.
+const API_WRITE_THROTTLE: Duration = Duration::from_millis(250);
 
 pub async fn run_sync(config_path: &str, run_once: bool, disable_initial_sync: bool) -> Result<()> {
     // Load config
@@ -34,19 +36,40 @@ pub async fn run_sync(config_path: &str, run_once: bool, disable_initial_sync: b
         .map(|secondary_config| PiHoleClient::new(secondary_config.clone()))
         .collect::<Vec<_>>();
 
+    info!(
+        "Configured secondary instances ({}): {}",
+        secondary_piholes.len(),
+        secondary_piholes
+            .iter()
+            .map(|s| {
+                let mode = s.config.sync_mode.unwrap_or(SyncMode::Teleporter);
+                format!("{}:{} ({:?})", s.config.host, s.config.port, mode)
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    for secondary in &secondary_piholes {
+        debug!(
+            "[{}:{}] sync_mode={:?}, api_sync_options={:?}",
+            secondary.config.host,
+            secondary.config.port,
+            secondary.config.sync_mode,
+            secondary.config.api_sync_options
+        );
+    }
+
     let has_teleporter_secondaries = secondary_piholes.iter().any(|secondary| {
         matches!(
             secondary.config.sync_mode,
             Some(SyncMode::Teleporter) | None
         )
     });
-    let has_config_api_secondaries = secondary_piholes
+    let has_api_secondaries = secondary_piholes
         .iter()
-        .any(|secondary| matches!(secondary.config.sync_mode, Some(SyncMode::ConfigApi)));
+        .any(|secondary| matches!(secondary.config.sync_mode, Some(SyncMode::Api)));
 
     let backup_path = Path::new(&config.sync.cache_location).join("pihole_backup.zip");
-    let last_filtered_config_hashes: Arc<Mutex<HashMap<String, u64>>> =
-        Arc::new(Mutex::new(HashMap::new()));
+    let hash_tracker = HashTracker::new();
 
     if has_teleporter_secondaries {
         ensure_cache_directory(&config.sync.cache_location, &backup_path);
@@ -60,8 +83,8 @@ pub async fn run_sync(config_path: &str, run_once: bool, disable_initial_sync: b
             &secondary_piholes,
             &backup_path,
             has_teleporter_secondaries,
-            has_config_api_secondaries,
-            &last_filtered_config_hashes,
+            has_api_secondaries,
+            &hash_tracker,
         )
         .await?;
         return Ok(());
@@ -72,8 +95,8 @@ pub async fn run_sync(config_path: &str, run_once: bool, disable_initial_sync: b
         &secondary_piholes,
         &backup_path,
         has_teleporter_secondaries,
-        has_config_api_secondaries,
-        &last_filtered_config_hashes,
+        has_api_secondaries,
+        &hash_tracker,
         disable_initial_sync,
         trigger_mode,
     )
@@ -87,8 +110,8 @@ pub async fn run_sync(config_path: &str, run_once: bool, disable_initial_sync: b
                 secondary_piholes.clone(),
                 backup_path.to_path_buf(),
                 has_teleporter_secondaries,
-                has_config_api_secondaries,
-                last_filtered_config_hashes,
+                has_api_secondaries,
+                hash_tracker.clone(),
             )
             .await?;
         }
@@ -99,8 +122,8 @@ pub async fn run_sync(config_path: &str, run_once: bool, disable_initial_sync: b
                 secondary_piholes.clone(),
                 backup_path.to_path_buf(),
                 has_teleporter_secondaries,
-                has_config_api_secondaries,
-                last_filtered_config_hashes.clone(),
+                has_api_secondaries,
+                hash_tracker.clone(),
             )
             .await?;
         }
@@ -112,8 +135,8 @@ pub async fn run_sync(config_path: &str, run_once: bool, disable_initial_sync: b
                 secondary_piholes.clone(),
                 backup_path.to_path_buf(),
                 has_teleporter_secondaries,
-                has_config_api_secondaries,
-                last_filtered_config_hashes.clone(),
+                has_api_secondaries,
+                hash_tracker.clone(),
             )
             .await?;
         }
@@ -145,8 +168,8 @@ async fn run_once_mode(
     secondary_piholes: &[PiHoleClient],
     backup_path: &Path,
     has_teleporter_secondaries: bool,
-    has_config_api_secondaries: bool,
-    last_filtered_config_hashes: &Arc<Mutex<HashMap<String, u64>>>,
+    has_api_secondaries: bool,
+    hash_tracker: &HashTracker,
 ) -> Result<()> {
     info!("Sync trigger mode: run-once (no watcher).");
     perform_sync(
@@ -154,8 +177,8 @@ async fn run_once_mode(
         secondary_piholes,
         backup_path,
         has_teleporter_secondaries,
-        has_config_api_secondaries,
-        last_filtered_config_hashes,
+        has_api_secondaries,
+        hash_tracker,
         None,
     )
     .await?;
@@ -167,8 +190,8 @@ async fn handle_initial_sync(
     secondary_piholes: &[PiHoleClient],
     backup_path: &Path,
     has_teleporter_secondaries: bool,
-    has_config_api_secondaries: bool,
-    last_filtered_config_hashes: &Arc<Mutex<HashMap<String, u64>>>,
+    has_api_secondaries: bool,
+    hash_tracker: &HashTracker,
     disable_initial_sync: bool,
     trigger_mode: SyncTriggerMode,
 ) -> Result<Option<u64>> {
@@ -180,8 +203,8 @@ async fn handle_initial_sync(
             secondary_piholes,
             backup_path,
             has_teleporter_secondaries,
-            has_config_api_secondaries,
-            last_filtered_config_hashes,
+            has_api_secondaries,
+            hash_tracker,
             None,
         )
         .await?;
@@ -218,13 +241,13 @@ async fn run_interval_trigger(
     secondary_piholes: Vec<PiHoleClient>,
     backup_path: std::path::PathBuf,
     has_teleporter_secondaries: bool,
-    has_config_api_secondaries: bool,
-    last_filtered_config_hashes: Arc<Mutex<HashMap<String, u64>>>,
+    has_api_secondaries: bool,
+    hash_tracker: HashTracker,
 ) -> Result<()> {
     let main_clone = main_pihole.clone();
     let secondaries_clone = secondary_piholes.clone();
     let backup_clone = backup_path.clone();
-    let last_filtered_hashes_clone = last_filtered_config_hashes.clone();
+    let last_filtered_hashes_clone = hash_tracker.clone();
     info!(
         "Sync trigger mode: interval. Running every {} minute(s).",
         sync_interval.as_secs() / 60
@@ -242,7 +265,7 @@ async fn run_interval_trigger(
                     &secondaries,
                     &backup,
                     has_teleporter_secondaries,
-                    has_config_api_secondaries,
+                    has_api_secondaries,
                     &hashes,
                     None,
                 )
@@ -261,13 +284,13 @@ async fn run_watch_config_file_trigger(
     secondary_piholes: Vec<PiHoleClient>,
     backup_path: std::path::PathBuf,
     has_teleporter_secondaries: bool,
-    has_config_api_secondaries: bool,
-    last_filtered_config_hashes: Arc<Mutex<HashMap<String, u64>>>,
+    has_api_secondaries: bool,
+    hash_tracker: HashTracker,
 ) -> Result<()> {
     let main_clone = main_pihole.clone();
     let secondaries_clone = secondary_piholes.clone();
     let backup_path_clone = backup_path.to_path_buf();
-    let last_filtered_hashes_clone = last_filtered_config_hashes.clone();
+    let last_filtered_hashes_clone = hash_tracker.clone();
     info!(
         "Sync trigger mode: watch_config_file. Watching {}.",
         config_watch_path.display()
@@ -287,7 +310,7 @@ async fn run_watch_config_file_trigger(
                 &secondaries,
                 &backup,
                 has_teleporter_secondaries,
-                has_config_api_secondaries,
+                has_api_secondaries,
                 &hashes,
                 None,
             )
@@ -305,14 +328,14 @@ async fn run_watch_config_api_trigger(
     secondary_piholes: Vec<PiHoleClient>,
     backup_path: std::path::PathBuf,
     has_teleporter_secondaries: bool,
-    has_config_api_secondaries: bool,
-    last_filtered_config_hashes: Arc<Mutex<HashMap<String, u64>>>,
+    has_api_secondaries: bool,
+    hash_tracker: HashTracker,
 ) -> Result<()> {
     let main_for_fetch = main_pihole.clone();
     let main_for_sync = main_pihole.clone();
     let secondaries_clone = secondary_piholes.clone();
     let backup_path_clone = backup_path.clone();
-    let last_filtered_hashes_clone = last_filtered_config_hashes.clone();
+    let last_filtered_hashes_clone = hash_tracker.clone();
     info!(
         "Sync trigger mode: watch_config_api. Polling every {} minute(s).",
         api_poll_interval.as_secs() / 60
@@ -335,7 +358,7 @@ async fn run_watch_config_api_trigger(
                     &secondaries,
                     &backup,
                     has_teleporter_secondaries,
-                    has_config_api_secondaries,
+                    has_api_secondaries,
                     &hashes,
                     Some(main_config),
                 )
@@ -352,8 +375,8 @@ async fn perform_sync(
     secondary_piholes: &[PiHoleClient],
     backup_path: &Path,
     has_teleporter_secondaries: bool,
-    has_config_api_secondaries: bool,
-    last_filtered_config_hashes: &Arc<Mutex<HashMap<String, u64>>>,
+    has_api_secondaries: bool,
+    hash_tracker: &HashTracker,
     provided_main_config: Option<serde_json::Value>,
 ) -> Result<Option<serde_json::Value>> {
     let mut main_config_used = provided_main_config;
@@ -362,12 +385,12 @@ async fn perform_sync(
         sync_teleporter(main_pihole, secondary_piholes, backup_path).await;
     }
 
-    if has_config_api_secondaries {
+    if has_api_secondaries {
         main_config_used = sync_config_api(
             main_pihole,
             secondary_piholes,
             main_config_used,
-            last_filtered_config_hashes,
+            hash_tracker,
         )
         .await;
     }
@@ -419,13 +442,235 @@ async fn sync_teleporter(
     }
 }
 
+#[derive(serde::Serialize)]
+struct NormalizedGroup<'a> {
+    name: &'a str,
+    comment: &'a Option<String>,
+    enabled: bool,
+}
+
+#[derive(serde::Serialize)]
+struct NormalizedList {
+    address: String,
+    list_type: String,
+    comment: Option<String>,
+    enabled: bool,
+    groups: Vec<String>,
+}
+
+fn normalize_groups(groups: &[Group]) -> Vec<NormalizedGroup<'_>> {
+    let mut normalized: Vec<NormalizedGroup<'_>> = groups
+        .iter()
+        .map(|g| NormalizedGroup {
+            name: &g.name,
+            comment: &g.comment,
+            enabled: g.enabled,
+        })
+        .collect();
+    normalized.sort_by(|a, b| a.name.cmp(b.name));
+    normalized
+}
+
+fn normalize_lists(lists: &[List], group_lookup: &HashMap<u32, String>) -> Vec<NormalizedList> {
+    let mut normalized = Vec::new();
+
+    for list in lists {
+        let group_ids = if list.groups.is_empty() {
+            vec![0]
+        } else {
+            list.groups.clone()
+        };
+        let mut group_names: Vec<String> = group_ids
+            .iter()
+            .map(|id| {
+                group_lookup
+                    .get(id)
+                    .cloned()
+                    .unwrap_or_else(|| format!("id:{}", id))
+            })
+            .collect();
+        group_names.sort();
+        normalized.push(NormalizedList {
+            address: list.address.clone(),
+            list_type: list.list_type.clone(),
+            comment: list.comment.clone(),
+            enabled: list.enabled,
+            groups: group_names,
+        });
+    }
+
+    normalized.sort_by(|a, b| {
+        a.address
+            .cmp(&b.address)
+            .then_with(|| a.list_type.cmp(&b.list_type))
+    });
+    normalized
+}
+
+async fn sync_groups(
+    main_groups: &[Group],
+    secondary_groups: &[Group],
+    secondary: &PiHoleClient,
+) -> Result<()> {
+    let secondary_by_name: HashMap<&str, &Group> = secondary_groups
+        .iter()
+        .map(|g| (g.name.as_str(), g))
+        .collect();
+
+    for group in main_groups {
+        match secondary_by_name.get(group.name.as_str()) {
+            Some(existing) => {
+                let needs_update =
+                    existing.comment != group.comment || existing.enabled != group.enabled;
+                if needs_update {
+                    secondary.update_group(&existing.name, group).await?;
+                    sleep(API_WRITE_THROTTLE).await;
+                }
+            }
+            None => {
+                secondary.add_group(group).await?;
+                sleep(API_WRITE_THROTTLE).await;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn groups_for_list(
+    list: &List,
+    main_group_lookup: &HashMap<u32, String>,
+    secondary_group_lookup: &HashMap<String, u32>,
+    sync_groups: bool,
+    secondary_host: &str,
+) -> Vec<u32> {
+    let raw_groups: Vec<u32> = if list.groups.is_empty() {
+        vec![0]
+    } else {
+        list.groups.clone()
+    };
+
+    if !sync_groups && raw_groups.iter().any(|g| *g != 0) {
+        warn!(
+            "[{}] sync_lists enabled without sync_groups; assigning list {} to default group because it is assigned to other groups on the main instance ({:?})",
+            secondary_host, list.address, raw_groups
+        );
+        return vec![0];
+    }
+
+    let mut mapped = Vec::new();
+    for gid in raw_groups {
+        let name = main_group_lookup
+            .get(&gid)
+            .cloned()
+            .unwrap_or_else(|| format!("id:{}", gid));
+        if let Some(sec_id) = secondary_group_lookup.get(&name) {
+            mapped.push(*sec_id);
+        } else if gid == 0 {
+            mapped.push(0);
+        } else {
+            warn!(
+                "[{}] Group '{}' missing on secondary; assigning list {} to default group 0",
+                secondary_host, name, list.address
+            );
+            mapped.push(0);
+        }
+    }
+
+    mapped.sort();
+    mapped.dedup();
+    mapped
+}
+
+fn lists_equal(target: &List, existing: &List) -> bool {
+    let mut target_groups = target.groups.clone();
+    let mut existing_groups = if existing.groups.is_empty() {
+        vec![0]
+    } else {
+        existing.groups.clone()
+    };
+    target_groups.sort();
+    existing_groups.sort();
+
+    target.comment == existing.comment
+        && target.enabled == existing.enabled
+        && target_groups == existing_groups
+}
+
+async fn sync_lists(
+    main_lists: &[List],
+    main_group_lookup: &HashMap<u32, String>,
+    secondary_groups: &[Group],
+    secondary_lists: &[List],
+    secondary: &PiHoleClient,
+    sync_groups: bool,
+) -> Result<()> {
+    let secondary_group_lookup: HashMap<String, u32> = secondary_groups
+        .iter()
+        .filter_map(|g| g.id.map(|id| (g.name.clone(), id)))
+        .collect();
+
+    let secondary_list_lookup: HashMap<(String, String), &List> = secondary_lists
+        .iter()
+        .map(|l| ((l.address.clone(), l.list_type.clone()), l))
+        .collect();
+
+    for list in main_lists {
+        let desired_groups = groups_for_list(
+            list,
+            main_group_lookup,
+            &secondary_group_lookup,
+            sync_groups,
+            &secondary.config.host,
+        );
+
+        let mut desired_list = list.clone();
+        desired_list.groups = desired_groups;
+
+        let key = (list.address.clone(), list.list_type.clone());
+        match secondary_list_lookup.get(&key) {
+            Some(existing) => {
+                if !lists_equal(&desired_list, existing) {
+                    secondary.update_list(&desired_list).await?;
+                    sleep(API_WRITE_THROTTLE).await;
+                }
+            }
+            None => {
+                secondary.add_list(&desired_list).await?;
+                sleep(API_WRITE_THROTTLE).await;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 async fn sync_config_api(
     main_pihole: &PiHoleClient,
     secondary_piholes: &[PiHoleClient],
     mut main_config_used: Option<serde_json::Value>,
-    last_filtered_config_hashes: &Arc<Mutex<HashMap<String, u64>>>,
+    hash_tracker: &HashTracker,
 ) -> Option<serde_json::Value> {
-    if main_config_used.is_none() {
+    let api_secondaries: Vec<&PiHoleClient> = secondary_piholes
+        .iter()
+        .filter(|secondary| matches!(secondary.config.sync_mode, Some(SyncMode::Api)))
+        .collect();
+    debug!("api_secondaries count: {}", api_secondaries.len());
+
+    if api_secondaries.is_empty() {
+        return main_config_used;
+    }
+
+    let needs_config_sync = api_secondaries.iter().any(|secondary| {
+        secondary
+            .config
+            .api_sync_options
+            .as_ref()
+            .and_then(|o| o.sync_config.as_ref())
+            .is_some()
+    });
+
+    if needs_config_sync && main_config_used.is_none() {
         match main_pihole.get_config().await {
             Ok(config_value) => main_config_used = Some(config_value),
             Err(e) => {
@@ -437,67 +682,310 @@ async fn sync_config_api(
         }
     }
 
-    if let Some(main_config) = &main_config_used {
-        for secondary_pihole in secondary_piholes {
-            if !matches!(secondary_pihole.config.sync_mode, Some(SyncMode::ConfigApi)) {
-                continue;
-            }
+    let mut needs_groups = api_secondaries.iter().any(|s| {
+        s.config
+            .api_sync_options
+            .as_ref()
+            .and_then(|o| o.sync_groups)
+            .unwrap_or(false)
+    });
+    let needs_lists = api_secondaries.iter().any(|s| {
+        s.config
+            .api_sync_options
+            .as_ref()
+            .and_then(|o| o.sync_lists)
+            .unwrap_or(false)
+    });
+    if needs_lists {
+        needs_groups = true; // list sync requires group mapping
+    }
+    debug!(
+        "API sync needs_config_sync={}, needs_groups={}, needs_lists={}",
+        needs_config_sync, needs_groups, needs_lists
+    );
 
-            let Some(config_sync) = secondary_pihole.config.config_api_sync_options.clone() else {
-                continue;
-            };
-
-            let filter_mode = match config_sync.mode.unwrap_or(ConfigApiSyncMode::Include) {
-                ConfigApiSyncMode::Include => FilterMode::OptIn,
-                ConfigApiSyncMode::Exclude => FilterMode::OptOut,
-            };
-
-            let filter = ConfigFilter::new(&config_sync.filter_keys, filter_mode);
-            let filtered_config = filter.filter_json(main_config.clone());
-            let host_key = secondary_pihole.config.host.clone();
-
-            let filtered_hash = match hash_config(&filtered_config) {
-                Ok(hash) => hash,
-                Err(e) => {
-                    error!(
-                        "[{}] Failed to hash filtered config: {:?}",
-                        secondary_pihole.config.host, e
+    let mut main_groups: Vec<Group> = Vec::new();
+    let mut main_group_lookup: HashMap<u32, String> = HashMap::new();
+    let mut main_groups_hash: Option<u64> = None;
+    if needs_groups {
+        match main_pihole.get_groups().await {
+            Ok(groups) => {
+                main_groups = groups;
+                main_group_lookup = main_groups
+                    .iter()
+                    .filter_map(|g| g.id.map(|id| (id, g.name.clone())))
+                    .collect();
+                if let Ok(hash) = hash_value(&normalize_groups(&main_groups)) {
+                    main_groups_hash = Some(hash);
+                    debug!(
+                        "Fetched {} group(s) from main; hash={}",
+                        main_groups.len(),
+                        hash
                     );
-                    continue;
+                } else {
+                    debug!(
+                        "Fetched {} group(s) from main but failed to compute hash",
+                        main_groups.len()
+                    );
                 }
-            };
+            }
+            Err(e) => error!(
+                "[{}] Failed to fetch groups from main instance: {:?}",
+                main_pihole.config.host, e
+            ),
+        }
+    }
 
-            if !filtered_config_has_changed(&host_key, filtered_hash, last_filtered_config_hashes)
-                .await
-            {
-                info!(
-                    "[{}] Skipping config_api sync; filtered config unchanged since last run",
-                    host_key
+    let mut main_lists: Vec<List> = Vec::new();
+    let mut main_lists_hash: Option<u64> = None;
+    if needs_lists {
+        match main_pihole.get_lists().await {
+            Ok(lists) => {
+                main_lists = lists;
+                if let Ok(hash) = hash_value(&normalize_lists(&main_lists, &main_group_lookup)) {
+                    main_lists_hash = Some(hash);
+                    debug!(
+                        "Fetched {} list(s) from main; hash={}",
+                        main_lists.len(),
+                        hash
+                    );
+                } else {
+                    debug!(
+                        "Fetched {} list(s) from main but failed to compute hash",
+                        main_lists.len()
+                    );
+                }
+            }
+            Err(e) => error!(
+                "[{}] Failed to fetch lists from main instance: {:?}",
+                main_pihole.config.host, e
+            ),
+        }
+    }
+
+    for secondary_pihole in &api_secondaries {
+        debug!(
+            "[{}] raw api_sync_options: {:?}",
+            secondary_pihole.config.host, secondary_pihole.config.api_sync_options
+        );
+        let Some(api_options) = secondary_pihole.config.api_sync_options.clone() else {
+            continue;
+        };
+        debug!(
+            "[{}] api_sync_options: groups={:?}, lists={:?}, config={:?}",
+            secondary_pihole.config.host,
+            api_options.sync_groups,
+            api_options.sync_lists,
+            api_options.sync_config.as_ref().map(|c| c.mode)
+        );
+
+        if let Some(config_sync) = api_options.sync_config {
+            if let Some(main_config) = &main_config_used {
+                let filter_mode = match config_sync.mode.unwrap_or(ConfigApiSyncMode::Include) {
+                    ConfigApiSyncMode::Include => FilterMode::OptIn,
+                    ConfigApiSyncMode::Exclude => FilterMode::OptOut,
+                };
+
+                let filter = ConfigFilter::new(&config_sync.filter_keys, filter_mode);
+                let filtered_config = filter.filter_json(main_config.clone());
+                let host_key = secondary_pihole.config.host.clone();
+
+                let filtered_hash = match hash_config(&filtered_config) {
+                    Ok(hash) => hash,
+                    Err(e) => {
+                        error!(
+                            "[{}] Failed to hash filtered config: {:?}",
+                            secondary_pihole.config.host, e
+                        );
+                        continue;
+                    }
+                };
+
+                if !hash_tracker
+                    .has_changed(&format!("config:{}", host_key), filtered_hash)
+                    .await
+                {
+                    info!(
+                        "[{}] Skipping config_api sync; filtered config unchanged since last run",
+                        host_key
+                    );
+                } else {
+                    info!("[{}] Syncing config via API", host_key);
+                    if let Err(e) = secondary_pihole
+                        .patch_config_and_wait_for_ftl_readiness(filtered_config.clone())
+                        .await
+                    {
+                        error!("{}", e);
+                    } else {
+                        if secondary_pihole.config.update_gravity.unwrap_or(false) {
+                            info!("[{}] Updating gravity", secondary_pihole.config.host);
+                            if let Err(e) = secondary_pihole.trigger_gravity_update().await {
+                                error!(
+                                    "Failed to update gravity on {}: {:?}",
+                                    secondary_pihole.config.host, e
+                                );
+                            }
+                        }
+
+                        hash_tracker
+                            .update(&format!("config:{}", host_key), filtered_hash)
+                            .await;
+                    }
+                }
+            } else {
+                debug!(
+                    "[{}] Skipping config sync because no main config is available",
+                    secondary_pihole.config.host
                 );
-                continue;
             }
+        }
 
-            info!("[{}] Syncing config via API", host_key);
-            if let Err(e) = secondary_pihole
-                .patch_config_and_wait_for_ftl_readiness(filtered_config.clone())
-                .await
-            {
-                error!("{}", e);
-                continue;
-            }
-
-            if secondary_pihole.config.update_gravity.unwrap_or(false) {
-                info!("[{}] Updating gravity", secondary_pihole.config.host);
-                if let Err(e) = secondary_pihole.trigger_gravity_update().await {
-                    error!(
-                        "Failed to update gravity on {}: {:?}",
-                        secondary_pihole.config.host, e
+        if api_options.sync_groups.unwrap_or(false) {
+            if main_groups.is_empty() {
+                warn!(
+                    "[{}] Skipping group sync: no groups fetched from main instance",
+                    secondary_pihole.config.host
+                );
+            } else if let Some(groups_hash) = main_groups_hash {
+                let changed = hash_tracker
+                    .has_changed(
+                        &format!("groups:{}", secondary_pihole.config.host),
+                        groups_hash,
+                    )
+                    .await;
+                debug!(
+                    "[{}] groups hash on main: {}; has_changed={}",
+                    secondary_pihole.config.host, groups_hash, changed
+                );
+                if !hash_tracker
+                    .has_changed(
+                        &format!("groups:{}", secondary_pihole.config.host),
+                        groups_hash,
+                    )
+                    .await
+                {
+                    info!(
+                        "[{}] Skipping groups sync; groups unchanged since last run",
+                        secondary_pihole.config.host
                     );
+                } else {
+                    let mut groups_failed = false;
+                    let secondary_groups = match secondary_pihole.get_groups().await {
+                        Ok(groups) => groups,
+                        Err(e) => {
+                            error!(
+                                "[{}] Failed to fetch groups from secondary: {:?}",
+                                secondary_pihole.config.host, e
+                            );
+                            groups_failed = true;
+                            Vec::new()
+                        }
+                    };
+                    if !groups_failed {
+                        if let Err(e) =
+                            sync_groups(&main_groups, &secondary_groups, secondary_pihole).await
+                        {
+                            error!("{}", e);
+                            groups_failed = true;
+                        }
+                    }
+
+                    if !groups_failed {
+                        hash_tracker
+                            .update(
+                                &format!("groups:{}", secondary_pihole.config.host),
+                                groups_hash,
+                            )
+                            .await;
+                    }
                 }
             }
+        }
 
-            let mut hashes = last_filtered_config_hashes.lock().await;
-            hashes.insert(host_key, filtered_hash);
+        if api_options.sync_lists.unwrap_or(false) {
+            if main_lists.is_empty() {
+                warn!(
+                    "[{}] Skipping lists sync: no lists fetched from main instance",
+                    secondary_pihole.config.host
+                );
+            } else if let Some(lists_hash) = main_lists_hash {
+                let changed = hash_tracker
+                    .has_changed(
+                        &format!("lists:{}", secondary_pihole.config.host),
+                        lists_hash,
+                    )
+                    .await;
+                debug!(
+                    "[{}] lists hash on main: {}; has_changed={}",
+                    secondary_pihole.config.host, lists_hash, changed
+                );
+                if !hash_tracker
+                    .has_changed(
+                        &format!("lists:{}", secondary_pihole.config.host),
+                        lists_hash,
+                    )
+                    .await
+                {
+                    info!(
+                        "[{}] Skipping lists sync; lists unchanged since last run",
+                        secondary_pihole.config.host
+                    );
+                } else {
+                    let mut lists_failed = false;
+                    let secondary_groups = match secondary_pihole.get_groups().await {
+                        Ok(groups) => groups,
+                        Err(e) => {
+                            error!(
+                                "[{}] Failed to fetch groups from secondary (needed for list sync): {:?}",
+                                secondary_pihole.config.host, e
+                            );
+                            lists_failed = true;
+                            Vec::new()
+                        }
+                    };
+
+                    let secondary_lists = if !lists_failed {
+                        match secondary_pihole.get_lists().await {
+                            Ok(lists) => lists,
+                            Err(e) => {
+                                error!(
+                                    "[{}] Failed to fetch lists from secondary: {:?}",
+                                    secondary_pihole.config.host, e
+                                );
+                                lists_failed = true;
+                                Vec::new()
+                            }
+                        }
+                    } else {
+                        Vec::new()
+                    };
+
+                    if !lists_failed {
+                        if let Err(e) = sync_lists(
+                            &main_lists,
+                            &main_group_lookup,
+                            &secondary_groups,
+                            &secondary_lists,
+                            secondary_pihole,
+                            api_options.sync_groups.unwrap_or(false),
+                        )
+                        .await
+                        {
+                            error!("{}", e);
+                            lists_failed = true;
+                        }
+                    }
+
+                    if !lists_failed {
+                        hash_tracker
+                            .update(
+                                &format!("lists:{}", secondary_pihole.config.host),
+                                lists_hash,
+                            )
+                            .await;
+                    }
+                }
+            }
         }
     }
 

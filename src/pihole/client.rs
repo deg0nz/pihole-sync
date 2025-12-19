@@ -3,8 +3,8 @@ use reqwest::{
     multipart::{Form, Part},
     Client, ClientBuilder, RequestBuilder, Response, StatusCode,
 };
-use serde::Deserialize;
-use serde_json::Value;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::{path::Path, sync::Arc};
 use tokio::sync::Mutex;
 use tokio::time::{sleep, Duration, Instant};
@@ -21,6 +21,38 @@ struct AuthResponse {
 pub struct AppPassword {
     pub password: String,
     pub hash: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Group {
+    pub name: String,
+    pub comment: Option<String>,
+    pub enabled: bool,
+    #[serde(default)]
+    pub id: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GroupsResponse {
+    groups: Vec<Group>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct List {
+    pub address: String,
+    #[serde(rename = "type")]
+    pub list_type: String,
+    pub comment: Option<String>,
+    #[serde(default)]
+    pub groups: Vec<u32>,
+    pub enabled: bool,
+    #[serde(default)]
+    pub id: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ListsResponse {
+    lists: Vec<List>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -347,6 +379,108 @@ impl PiHoleClient {
                 }
             }
         }
+    }
+
+    pub async fn get_groups(&self) -> Result<Vec<Group>> {
+        let (host, port) = self.instance_label();
+        trace!("[{}:{}] Fetching /groups", host, port);
+        let response = self.get("/groups").await?;
+        let groups = response.json::<GroupsResponse>().await?.groups;
+        Ok(groups)
+    }
+
+    pub async fn add_group(&self, group: &Group) -> Result<()> {
+        let (host, port) = self.instance_label();
+        trace!("[{}:{}] Adding group {}", host, port, group.name);
+        self.ensure_authenticated().await?;
+        let payload = json!({
+            "name": group.name,
+            "comment": group.comment,
+            "enabled": group.enabled
+        });
+        let url = format!("{}/groups", self.base_url);
+        self.authorized_request(self.client.post(&url).json(&payload))
+            .await?
+            .error_for_status()
+            .context(format!("Failed to add group {}", group.name))?;
+        Ok(())
+    }
+
+    pub async fn update_group(&self, existing_name: &str, group: &Group) -> Result<()> {
+        let (host, port) = self.instance_label();
+        trace!(
+            "[{}:{}] Updating group {} -> {}",
+            host,
+            port,
+            existing_name,
+            group.name
+        );
+        self.ensure_authenticated().await?;
+        let payload = json!({
+            "name": group.name,
+            "comment": group.comment,
+            "enabled": group.enabled
+        });
+        let url = format!("{}/groups/{}", self.base_url, existing_name);
+        self.authorized_request(self.client.put(&url).json(&payload))
+            .await?
+            .error_for_status()
+            .context(format!("Failed to update group {}", existing_name))?;
+        Ok(())
+    }
+
+    pub async fn get_lists(&self) -> Result<Vec<List>> {
+        let (host, port) = self.instance_label();
+        trace!("[{}:{}] Fetching /lists", host, port);
+        let response = self.get("/lists").await?;
+        let lists = response.json::<ListsResponse>().await?.lists;
+        Ok(lists)
+    }
+
+    pub async fn add_list(&self, list: &List) -> Result<()> {
+        let (host, port) = self.instance_label();
+        trace!("[{}:{}] Adding list {}", host, port, list.address);
+        self.ensure_authenticated().await?;
+        let payload = json!({
+            "address": list.address,
+            "comment": list.comment,
+            "groups": list.groups,
+            "enabled": list.enabled
+        });
+        let url = format!("{}/lists", self.base_url);
+        self.authorized_request(
+            self.client
+                .post(&url)
+                .query(&[("type", list.list_type.as_str())])
+                .json(&payload),
+        )
+        .await?
+        .error_for_status()
+        .context(format!("Failed to add list {}", list.address))?;
+        Ok(())
+    }
+
+    pub async fn update_list(&self, list: &List) -> Result<()> {
+        let (host, port) = self.instance_label();
+        trace!("[{}:{}] Updating list {}", host, port, list.address);
+        self.ensure_authenticated().await?;
+        let payload = json!({
+            "comment": list.comment,
+            "groups": list.groups,
+            "enabled": list.enabled,
+            "type": list.list_type
+        });
+        let url = format!("{}/lists/{}", self.base_url, list.address);
+        self.authorized_request(
+            self.client
+                .put(&url)
+                .query(&[("type", list.list_type.as_str())])
+                .json(&payload),
+        )
+        .await?
+        .error_for_status()
+        .context(format!("Failed to update list {}", list.address))?;
+        Ok(())
     }
 
     /////////////////////////

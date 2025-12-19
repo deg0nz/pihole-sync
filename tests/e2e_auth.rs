@@ -10,7 +10,7 @@ use common::{ensure_docker_host, spawn_pihole, STARTUP_TIMEOUT};
 const WEBPASSWORD: &str = "admin";
 
 #[tokio::test(flavor = "multi_thread")]
-async fn auth_with_app_password() -> Result<()> {
+async fn e2e_auth_with_app_password() -> Result<()> {
     common::init_logging();
     ensure_docker_host()?;
     let mut instance = spawn_pihole(WEBPASSWORD, None, |_| {}).await?;

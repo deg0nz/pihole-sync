@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use pihole_sync::{
     config::{
-        Config, ConfigApiSyncMode, ConfigSyncOptions, InstanceConfig, SyncConfig, SyncMode,
-        SyncTriggerMode,
+        ApiSyncOptions, Config, ConfigApiSyncMode, ConfigSyncOptions, InstanceConfig, SyncConfig,
+        SyncMode, SyncTriggerMode,
     },
     pihole::client::PiHoleClient,
     sync::run_sync,
@@ -138,7 +138,7 @@ fn write_test_config(
 }
 
 #[tokio::test()]
-async fn config_api_selective_sync_include_and_exclude() -> Result<()> {
+async fn e2e_config_api_selective_sync_include_and_exclude() -> Result<()> {
     common::init_logging();
     ensure_docker_host()?;
     run_include_mode().await?;
@@ -169,10 +169,13 @@ async fn run_include_mode() -> Result<()> {
         .context("failed to seed secondary config")?;
 
     let mut secondary_cfg = secondary.client.config.clone();
-    secondary_cfg.sync_mode = Some(SyncMode::ConfigApi);
-    secondary_cfg.config_api_sync_options = Some(ConfigSyncOptions {
-        mode: Some(ConfigApiSyncMode::Include),
-        filter_keys: vec!["dns.upstreams".into(), "webserver.session.timeout".into()],
+    secondary_cfg.sync_mode = Some(SyncMode::Api);
+    secondary_cfg.api_sync_options = Some(ApiSyncOptions {
+        sync_config: Some(ConfigSyncOptions {
+            mode: Some(ConfigApiSyncMode::Include),
+            filter_keys: vec!["dns.upstreams".into(), "webserver.session.timeout".into()],
+        }),
+        ..Default::default()
     });
 
     let config_path =
@@ -238,10 +241,13 @@ async fn run_exclude_mode() -> Result<()> {
         .context("failed to seed secondary config")?;
 
     let mut secondary_cfg = secondary.client.config.clone();
-    secondary_cfg.sync_mode = Some(SyncMode::ConfigApi);
-    secondary_cfg.config_api_sync_options = Some(ConfigSyncOptions {
-        mode: Some(ConfigApiSyncMode::Exclude),
-        filter_keys: vec!["dns.cnameRecords".into()],
+    secondary_cfg.sync_mode = Some(SyncMode::Api);
+    secondary_cfg.api_sync_options = Some(ApiSyncOptions {
+        sync_config: Some(ConfigSyncOptions {
+            mode: Some(ConfigApiSyncMode::Exclude),
+            filter_keys: vec!["dns.cnameRecords".into()],
+        }),
+        ..Default::default()
     });
 
     let config_path =

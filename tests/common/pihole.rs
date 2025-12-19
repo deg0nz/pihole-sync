@@ -77,6 +77,7 @@ where
         api_key: webpassword.into(),
         update_gravity: Some(false),
         sync_mode: None,
+        api_sync_options: None,
         config_api_sync_options: None,
         config_sync: None,
         teleporter_sync_options: None,
