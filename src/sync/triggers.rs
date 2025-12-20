@@ -142,7 +142,7 @@ where
         match fetch_config().await {
             Ok(main_config) => match hash_config(&main_config) {
                 Ok(current_hash) => {
-                    if last_main_config_hash.map_or(true, |prev| prev != current_hash) {
+                    if last_main_config_hash != Some(current_hash) {
                         info!(
                             "Detected config change on main instance (hash {} -> {}). Syncing...",
                             last_main_config_hash

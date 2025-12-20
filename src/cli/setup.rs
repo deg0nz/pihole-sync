@@ -109,7 +109,7 @@ pub fn create_systemd_service() -> Result<()> {
             .and_then(|name| name.to_str())
             .unwrap_or("pihole-sync.service");
 
-        println!("");
+        println!();
         println!("Next steps to activate the service:");
         println!("  sudo systemctl daemon-reload");
         println!("  sudo systemctl start {}", service_name);

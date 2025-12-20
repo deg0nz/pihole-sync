@@ -490,7 +490,6 @@ impl PiHoleClient {
     /////////////////////////
     /// HTTP Request helpers
     /////////////////////////
-
     async fn authorized_request(&self, request: RequestBuilder) -> Result<Response> {
         let token = self.get_session_token().await.unwrap_or_default();
         let request = request.header(X_FTL_SID_HEADER, &token);

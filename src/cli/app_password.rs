@@ -51,7 +51,7 @@ pub async fn acquire_app_password(config_path: &str) -> Result<()> {
     );
     println!("Password (add to pihole-sync config): {}", app_pw.password);
     println!("Hash (add to Pi-hole): {}", app_pw.hash);
-    println!("");
+    println!();
     println!("-----");
     println!("Hint:");
     println!(

@@ -189,6 +189,7 @@ async fn run_once_mode(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_initial_sync(
     main_pihole: &PiHoleClient,
     secondary_piholes: &[PiHoleClient],
@@ -325,6 +326,7 @@ async fn run_watch_config_file_trigger(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_watch_config_api_trigger(
     api_poll_interval: Duration,
     last_main_config_hash: Option<u64>,
