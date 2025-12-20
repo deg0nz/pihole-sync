@@ -1,5 +1,6 @@
 use anyhow::Result;
 use pihole_sync::cli::Cli;
+use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 fn setup_logging() {
@@ -13,6 +14,8 @@ fn setup_logging() {
 #[tokio::main]
 async fn main() -> Result<()> {
     setup_logging();
+
+    info!("Starting pihole-sync v{}", env!("CARGO_PKG_VERSION"));
 
     Cli::parse_args().await?;
 
