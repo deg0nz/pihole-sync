@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use dialoguer::{theme::ColorfulTheme, Password, Select};
 use indicatif::ProgressBar;
 
@@ -28,7 +28,7 @@ pub async fn acquire_app_password(config_path: &str) -> Result<()> {
         .with_prompt("Please select the instance to fetch an API app password from")
         .items(&selection_list)
         .interact()
-        .unwrap();
+        .context("Failed to read user selection")?;
 
     let password = Password::with_theme(&ColorfulTheme::default())
         .with_prompt(format!(
@@ -36,9 +36,9 @@ pub async fn acquire_app_password(config_path: &str) -> Result<()> {
             instances_list[selection].host
         ))
         .interact()
-        .unwrap();
+        .context("Failed to read password input")?;
 
-    let pihole_client = PiHoleClient::new(instances_list[selection].clone());
+    let pihole_client = PiHoleClient::new(instances_list[selection].clone())?;
 
     let bar = ProgressBar::new_spinner();
     bar.enable_steady_tick(Duration::from_millis(100));
@@ -51,7 +51,7 @@ pub async fn acquire_app_password(config_path: &str) -> Result<()> {
     );
     println!("Password (add to pihole-sync config): {}", app_pw.password);
     println!("Hash (add to Pi-hole): {}", app_pw.hash);
-    println!("");
+    println!();
     println!("-----");
     println!("Hint:");
     println!(

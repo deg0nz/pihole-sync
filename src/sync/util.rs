@@ -39,7 +39,7 @@ impl HashTracker {
         let hashes = self.inner.lock().await;
         hashes
             .get(key)
-            .map_or(true, |previous| *previous != current_hash)
+            .is_none_or(|previous| *previous != current_hash)
     }
 
     pub async fn update(&self, key: &str, hash: u64) {

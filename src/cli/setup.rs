@@ -3,6 +3,8 @@ use std::{env, fs, path::PathBuf};
 use anyhow::{bail, Result};
 use dialoguer::{theme::ColorfulTheme, Confirm, Input};
 
+use crate::constants::DEFAULT_SYSTEMD_PATH;
+
 fn quote_if_needed(value: &str) -> String {
     if value.contains(' ') {
         format!("\"{}\"", value)
@@ -44,7 +46,7 @@ pub fn create_systemd_service() -> Result<()> {
 
     let default_config_path = cwd.join("config.yaml");
     let default_exec_path = cwd.join("pihole-sync");
-    let default_service_path = PathBuf::from("/etc/systemd/system/pihole-sync.service");
+    let default_service_path = PathBuf::from(DEFAULT_SYSTEMD_PATH);
 
     let config_path: String = Input::with_theme(&theme)
         .with_prompt("Path to pihole-sync config file")
@@ -107,7 +109,7 @@ pub fn create_systemd_service() -> Result<()> {
             .and_then(|name| name.to_str())
             .unwrap_or("pihole-sync.service");
 
-        println!("");
+        println!();
         println!("Next steps to activate the service:");
         println!("  sudo systemctl daemon-reload");
         println!("  sudo systemctl start {}", service_name);
