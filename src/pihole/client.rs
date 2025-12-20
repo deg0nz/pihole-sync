@@ -87,18 +87,22 @@ const X_FTL_SID_HEADER: &str = "X-FTL-SID";
 static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
 
 impl PiHoleClient {
-    pub fn new(config: InstanceConfig) -> Self {
+    fn build_client() -> Result<Client> {
+        ClientBuilder::new()
+            .user_agent(APP_USER_AGENT)
+            .danger_accept_invalid_certs(true)
+            .build()
+            .context("Failed to configure HTTP client")
+    }
+
+    pub fn new(config: InstanceConfig) -> Result<Self> {
         let base_url = format!("{}://{}:{}/api", config.schema, config.host, config.port);
-        Self {
-            client: ClientBuilder::new()
-                .user_agent(APP_USER_AGENT)
-                .danger_accept_invalid_certs(true)
-                .build()
-                .unwrap(),
+        Ok(Self {
+            client: Self::build_client()?,
             base_url,
             session_token: Arc::new(Mutex::new(None)),
             config,
-        }
+        })
     }
 
     fn instance_label(&self) -> (&str, u16) {
@@ -267,9 +271,8 @@ impl PiHoleClient {
         Ok(())
     }
 
-    async fn get_session_token(&self) -> Result<String> {
-        let session_token = self.session_token.lock().await.clone();
-        Ok(session_token.unwrap_or("".to_string()))
+    async fn get_session_token(&self) -> Option<String> {
+        self.session_token.lock().await.clone()
     }
 
     pub async fn logout(&self) -> Result<()> {
@@ -305,8 +308,9 @@ impl PiHoleClient {
         let response = self.get("/config").await?;
         let v: Value = response.json().await?;
 
-        // TODO: Remove unwrap, handle None
-        Ok(v.get("config").unwrap().to_owned())
+        v.get("config")
+            .cloned()
+            .ok_or_else(|| anyhow!("[{}:{}] Response missing 'config' field", host, port))
     }
 
     pub async fn patch_config(&self, config: Value) -> Result<()> {
@@ -488,7 +492,7 @@ impl PiHoleClient {
     /////////////////////////
 
     async fn authorized_request(&self, request: RequestBuilder) -> Result<Response> {
-        let token = self.get_session_token().await?;
+        let token = self.get_session_token().await.unwrap_or_default();
         let request = request.header(X_FTL_SID_HEADER, &token);
 
         request.send().await.map_err(Into::into)

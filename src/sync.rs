@@ -8,7 +8,7 @@ pub(crate) mod util;
 use std::path::Path;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use tracing::{debug, error, info, warn};
 
 use crate::config::{Config, SyncMode, SyncTriggerMode};
@@ -33,12 +33,12 @@ pub async fn run_sync(config_path: &str, run_once: bool, disable_initial_sync: b
     );
     let config_watch_path = std::path::PathBuf::from(config.sync.config_path.clone());
 
-    let main_pihole = PiHoleClient::new(config.main.clone());
-    let secondary_piholes = config
+    let main_pihole = PiHoleClient::new(config.main.clone())?;
+    let secondary_piholes: Vec<PiHoleClient> = config
         .secondary
         .iter()
         .map(|secondary_config| PiHoleClient::new(secondary_config.clone()))
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>>>()?;
 
     info!(
         "Configured secondary instances ({}): {}",
@@ -76,7 +76,7 @@ pub async fn run_sync(config_path: &str, run_once: bool, disable_initial_sync: b
     let hash_tracker = HashTracker::new();
 
     if has_teleporter_secondaries {
-        ensure_cache_directory(&config.sync.cache_location, &backup_path);
+        ensure_cache_directory(&config.sync.cache_location, &backup_path)?;
     }
 
     info!("Running in sync mode...");
@@ -149,22 +149,22 @@ pub async fn run_sync(config_path: &str, run_once: bool, disable_initial_sync: b
     Ok(())
 }
 
-fn ensure_cache_directory(cache_location: &str, backup_path: &Path) {
+fn ensure_cache_directory(cache_location: &str, backup_path: &Path) -> Result<()> {
     // Check cache directory (teleporter ZIP)
     info!("Checking cache directory: {}", backup_path.display());
     let path = Path::new(cache_location);
 
     if !path.exists() {
         info!("Cache directory does not exist. Trying to create it.");
-
-        match std::fs::create_dir_all(cache_location) {
-            Ok(_) => info!("Directory created successfully"),
-            Err(e) => {
-                error!("Error creating directory: {}", e);
-                panic!("Failed to create cache directory. Please ensure the process has the necessary permissions for {}", cache_location);
-            }
-        }
+        std::fs::create_dir_all(cache_location).with_context(|| {
+            format!(
+                "Failed to create cache directory at {}. Please ensure the process has write permissions",
+                cache_location
+            )
+        })?;
+        info!("Directory created successfully");
     }
+    Ok(())
 }
 
 async fn run_once_mode(

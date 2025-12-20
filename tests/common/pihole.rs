@@ -87,7 +87,7 @@ where
 
     configure(&mut config);
 
-    let client = PiHoleClient::new(config);
+    let client = PiHoleClient::new(config)?;
     wait_for_ready(&client).await?;
 
     Ok(PiHoleInstance {
