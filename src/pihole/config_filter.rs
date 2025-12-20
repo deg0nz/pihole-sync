@@ -106,17 +106,8 @@ impl ConfigFilter {
 
             let should_include = self.should_include_path(&current_path);
 
-            match self.mode {
-                FilterMode::OptIn => {
-                    if should_include {
-                        filtered_obj.insert(key, self.filter_value(value, current_path));
-                    }
-                }
-                FilterMode::OptOut => {
-                    if should_include {
-                        filtered_obj.insert(key, self.filter_value(value, current_path));
-                    }
-                }
+            if should_include {
+                filtered_obj.insert(key, self.filter_value(value, current_path));
             }
         }
 
@@ -131,17 +122,8 @@ impl ConfigFilter {
 
             let should_include = self.should_include_path(&current_path);
 
-            match self.mode {
-                FilterMode::OptIn => {
-                    if should_include {
-                        filtered_arr.push(self.filter_value(value, current_path));
-                    }
-                }
-                FilterMode::OptOut => {
-                    if should_include {
-                        filtered_arr.push(self.filter_value(value, current_path));
-                    }
-                }
+            if should_include {
+                filtered_arr.push(self.filter_value(value, current_path));
             }
         }
 

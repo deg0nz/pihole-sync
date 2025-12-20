@@ -5,6 +5,7 @@ mod setup;
 use std::path::Path;
 
 use crate::config::Config;
+use crate::constants::DEFAULT_CONFIG_PATH;
 use crate::sync::run_sync;
 
 use anyhow::{anyhow, Result};
@@ -152,7 +153,7 @@ impl Cli {
             return Ok(config_path_cli.to_string());
         }
 
-        let config_path_yaml = Path::new("/etc/pihole-sync/config.yaml");
+        let config_path_yaml = Path::new(DEFAULT_CONFIG_PATH);
 
         if config_path_yaml.exists() {
             if let Some(path_str) = config_path_yaml.to_str() {
@@ -161,7 +162,8 @@ impl Cli {
         }
 
         Err(anyhow!(
-            "No default config found and --config not specified. Please create a default YAML config file (/etc/pihole-sync/config.yaml) or use the --config flag."
+            "No default config found and --config not specified. Please create a default YAML config file ({}) or use the --config flag.",
+            DEFAULT_CONFIG_PATH
         ))
     }
 }

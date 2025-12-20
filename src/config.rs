@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
 use tracing::warn;
 
+use crate::constants::{DEFAULT_PIHOLE_CONFIG_PATH, DEFAULT_SYNC_INTERVAL_MINUTES};
+
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SyncMode {
@@ -128,11 +130,11 @@ fn default_trigger_mode() -> SyncTriggerMode {
 }
 
 fn default_pihole_config_path() -> String {
-    "/etc/pihole/pihole.toml".to_string()
+    DEFAULT_PIHOLE_CONFIG_PATH.to_string()
 }
 
 fn default_interval_minutes() -> u64 {
-    60
+    DEFAULT_SYNC_INTERVAL_MINUTES
 }
 
 impl Default for TeleporterImportOptions {
