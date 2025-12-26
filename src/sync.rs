@@ -26,6 +26,8 @@ use crate::sync::util::{hash_config, hash_value, is_pihole_update_running, HashT
 
 pub use triggers::{run_interval_mode, watch_config_api, watch_config_file};
 
+const TRIGGER_API_READINESS_TIMEOUT_SECS: u64 = 60;
+
 #[derive(Debug, Clone, Copy)]
 struct SyncModes {
     teleporter: bool,
@@ -69,6 +71,39 @@ fn build_group_lookup(groups: &[Group]) -> std::collections::HashMap<u32, String
         .iter()
         .filter_map(|g| g.id.map(|id| (id, g.name.clone())))
         .collect()
+}
+
+async fn wait_for_api_readiness_after_trigger(
+    main_pihole: &PiHoleClient,
+    secondary_piholes: &[PiHoleClient],
+) -> Result<()> {
+    let timeout = Duration::from_secs(TRIGGER_API_READINESS_TIMEOUT_SECS);
+
+    debug!(
+        "[{}] Waiting for Pi-hole API to become ready after trigger",
+        main_pihole.config.host
+    );
+    main_pihole.wait_for_ready(timeout).await.with_context(|| {
+        format!(
+            "[{}] Main Pi-hole API not ready after waiting {}s",
+            main_pihole.config.host, TRIGGER_API_READINESS_TIMEOUT_SECS
+        )
+    })?;
+
+    for secondary in secondary_piholes {
+        debug!(
+            "[{}] Waiting for Pi-hole API to become ready after trigger",
+            secondary.config.host
+        );
+        secondary.wait_for_ready(timeout).await.with_context(|| {
+            format!(
+                "[{}] Secondary Pi-hole API not ready after waiting {}s",
+                secondary.config.host, TRIGGER_API_READINESS_TIMEOUT_SECS
+            )
+        })?;
+    }
+
+    Ok(())
 }
 
 pub async fn run_sync(config_path: &str, run_once: bool, disable_initial_sync: bool) -> Result<()> {
@@ -352,6 +387,10 @@ async fn run_watch_config_file_trigger(
                 warn!("Detected running \"pihole -up\"; skipping sync until update completes.");
                 return Ok(());
             }
+            if let Err(e) = wait_for_api_readiness_after_trigger(&main, &secondaries).await {
+                warn!("Skipping triggered sync; Pi-hole API not ready yet: {}", e);
+                return Ok(());
+            }
             perform_sync(
                 &main,
                 &secondaries,
@@ -403,6 +442,10 @@ async fn run_watch_config_api_trigger(
             let hashes = last_filtered_hashes_clone.clone();
             let state = state_clone.clone();
             async move {
+                if let Err(e) = wait_for_api_readiness_after_trigger(&main, &secondaries).await {
+                    warn!("Skipping triggered sync; Pi-hole API not ready yet: {}", e);
+                    return Ok(());
+                }
                 perform_sync(
                     &main,
                     &secondaries,
