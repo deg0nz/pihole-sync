@@ -66,12 +66,7 @@ pub struct ConfigSyncOptions {
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct ApiSyncOptions {
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        rename = "config",
-        alias = "config"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "config")]
     pub sync_config: Option<ConfigSyncOptions>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sync_groups: Option<bool>,
