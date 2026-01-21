@@ -124,8 +124,8 @@ where
 pub async fn watch_config_api<F, Fut, G, GFut>(
     poll_interval: Duration,
     last_main_config_hash: Option<u64>,
-    fetch_config: G,
-    on_change: F,
+    mut fetch_config: G,
+    mut on_change: F,
 ) -> Result<()>
 where
     F: FnMut(serde_json::Value) -> Fut + Send + 'static,
@@ -134,8 +134,6 @@ where
     GFut: Future<Output = Result<serde_json::Value>> + Send,
 {
     let mut last_main_config_hash = last_main_config_hash;
-    let mut fetch_config = fetch_config;
-    let mut on_change = on_change;
 
     loop {
         sleep(poll_interval).await;

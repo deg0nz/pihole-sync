@@ -32,6 +32,9 @@ pub struct SyncConfig {
     pub config_path: String,
     #[serde(default)]
     pub api_poll_interval: Option<u64>,
+    /// Timeout (in seconds) to wait for Pi-hole API readiness after a trigger before running sync
+    #[serde(default = "default_trigger_api_readiness_timeout_secs")]
+    pub trigger_api_readiness_timeout_secs: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -130,6 +133,10 @@ fn default_pihole_config_path() -> String {
 
 fn default_interval_minutes() -> u64 {
     DEFAULT_SYNC_INTERVAL_MINUTES
+}
+
+fn default_trigger_api_readiness_timeout_secs() -> u64 {
+    60
 }
 
 impl Default for TeleporterImportOptions {

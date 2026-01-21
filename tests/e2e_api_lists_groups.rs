@@ -399,6 +399,7 @@ fn write_test_config(
             trigger_mode: SyncTriggerMode::Interval,
             config_path: "/etc/pihole/pihole.toml".into(),
             api_poll_interval: None,
+            trigger_api_readiness_timeout_secs: 60,
         },
         main,
         secondary: vec![secondary],

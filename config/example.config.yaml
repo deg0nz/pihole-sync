@@ -7,6 +7,8 @@ sync:
   api_poll_interval: 5
   # Pi-hole config path to watch when trigger_mode is watch_config_file
   config_path: /etc/pihole/pihole.toml
+  # Time to wait (seconds) for Pi-hole API to become reachable again after a trigger before running sync
+  trigger_api_readiness_timeout_secs: 60
   # Cache location for temporary files (inside the container)
   cache_location: /var/cache/pihole-sync
 

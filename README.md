@@ -68,6 +68,7 @@ The default config location is `/etc/pihole-sync/config.yaml`; use `--config /pa
   - `interval` (default): run every `sync.interval` minutes
   - `watch_config_file`: watch `/etc/pihole/pihole.toml` (override via `sync.config_path`)
   - `watch_config_api`: poll `/api/config` every `sync.api_poll_interval` minutes (falls back to `sync.interval`)
+- For watch-based triggers, set `sync.trigger_api_readiness_timeout_secs` (default `60`) to control how long to wait for Pi-hole's API to come back after a config change before running the sync.
 - Run `pihole-sync sync` for running in sync mode (sessions are logged out after each run to avoid occupying Pi-hole session slots)
   - Use `pihole-sync sync --once` to run the sync once and exit.
   - Use `pihole-sync sync --no-initial-sync` to start watchers without an initial sync.
