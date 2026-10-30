@@ -232,11 +232,11 @@ impl SyncContext {
             let ctx = ctx.clone();
             async move {
                 if is_pihole_update_running().await? {
-                    warn!("Detected running \"pihole -up\"; skipping sync until update completes.");
+                    warn!("Detected running \"pihole -up\"; skipping sync, the change will be picked up at the next file change.");
                     return Ok(());
                 }
                 if let Err(e) = ctx.wait_for_api_readiness().await {
-                    warn!("Skipping triggered sync; Pi-hole API not ready yet: {}", e);
+                    warn!("Skipping triggered sync; Pi-hole API not ready yet, the change will be picked up at the next file change: {}", e);
                     return Ok(());
                 }
                 ctx.perform_sync(None).await
@@ -266,10 +266,11 @@ impl SyncContext {
                 let ctx = ctx.clone();
                 async move {
                     if let Err(e) = ctx.wait_for_api_readiness().await {
-                        warn!("Skipping triggered sync; Pi-hole API not ready yet: {}", e);
-                        return Ok(());
+                        warn!("Skipping triggered sync; Pi-hole API not ready yet, retrying next poll: {}", e);
+                        return Ok(false);
                     }
-                    ctx.perform_sync(Some(main_config)).await
+                    ctx.perform_sync(Some(main_config)).await?;
+                    Ok(true)
                 }
             },
         )

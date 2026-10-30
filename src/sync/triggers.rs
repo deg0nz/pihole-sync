@@ -129,7 +129,8 @@ pub async fn watch_config_api<F, Fut, G, GFut>(
 ) -> Result<()>
 where
     F: FnMut(serde_json::Value) -> Fut + Send + 'static,
-    Fut: Future<Output = Result<()>> + Send,
+    // Ok(true) = synced; Ok(false) = skipped, retry on the next poll.
+    Fut: Future<Output = Result<bool>> + Send,
     G: FnMut() -> GFut + Send + 'static,
     GFut: Future<Output = Result<serde_json::Value>> + Send,
 {
@@ -148,8 +149,9 @@ where
                                 .unwrap_or_else(|| "none".into()),
                             current_hash
                         );
-                        on_change(main_config.clone()).await?;
-                        last_main_config_hash = Some(current_hash);
+                        if on_change(main_config.clone()).await? {
+                            last_main_config_hash = Some(current_hash);
+                        }
                     } else {
                         debug!(
                             "No config change detected on main instance (hash {}).",

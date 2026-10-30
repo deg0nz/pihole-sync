@@ -106,7 +106,7 @@ async fn watch_config_api_triggers_on_change() -> Result<()> {
             async move {
                 assert_eq!(cfg, expected);
                 let _ = tx.send(());
-                Ok(())
+                Ok(true)
             }
         },
     ));
@@ -118,5 +118,46 @@ async fn watch_config_api_triggers_on_change() -> Result<()> {
 
     watcher.abort();
     assert!(fetch_counter_clone.load(Ordering::SeqCst) >= 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn watch_config_api_retries_skipped_sync() -> Result<()> {
+    let config1 = json!({ "config": { "dns": { "servers": ["1.1.1.1"] } } });
+    let config2 = json!({ "config": { "dns": { "servers": ["9.9.9.9"] } } });
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_clone = calls.clone();
+    let (tx, mut rx) = mpsc::unbounded_channel();
+
+    let watcher = tokio::spawn(watch_config_api(
+        Duration::from_millis(20),
+        Some(hash_config(&config1)?),
+        move || {
+            let cfg = config2.clone();
+            async move { Ok(cfg) }
+        },
+        move |_| {
+            let call = calls_clone.fetch_add(1, Ordering::SeqCst);
+            let tx = tx.clone();
+            async move {
+                // First attempt is skipped; the unchanged config must be retried.
+                if call == 0 {
+                    return Ok(false);
+                }
+                let _ = tx.send(());
+                Ok(true)
+            }
+        },
+    ));
+
+    timeout(Duration::from_secs(2), rx.recv())
+        .await
+        .expect("skipped sync was not retried")
+        .expect("channel closed");
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    watcher.abort();
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
     Ok(())
 }
