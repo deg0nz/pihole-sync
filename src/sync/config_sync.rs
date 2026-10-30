@@ -75,6 +75,18 @@ pub fn determine_api_sync_needs(secondary_piholes: &[PiHoleClient]) -> ApiSyncNe
     }
 }
 
+/// Never push the main's API credentials; they would lock pihole-sync out of the secondary.
+fn strip_api_credentials(config: &mut serde_json::Value) {
+    if let Some(api) = config
+        .pointer_mut("/webserver/api")
+        .and_then(|v| v.as_object_mut())
+    {
+        for key in ["app_pwhash", "pwhash", "password"] {
+            api.remove(key);
+        }
+    }
+}
+
 /// Sync configuration to a single secondary instance
 async fn sync_config_for_secondary(
     secondary: &PiHoleClient,
@@ -88,7 +100,8 @@ async fn sync_config_for_secondary(
     };
 
     let filter = ConfigFilter::new(&config_sync.filter_keys, filter_mode);
-    let filtered_config = filter.filter_json(main_config.clone());
+    let mut filtered_config = filter.filter_json(main_config.clone());
+    strip_api_credentials(&mut filtered_config);
     let host_key = secondary.config.host.clone();
     let tracker_key = format!("config:{}:{}", host_key, secondary.config.port);
 
@@ -313,5 +326,22 @@ pub async fn sync_config_api(
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exclude_mode_with_empty_keys_strips_api_credentials() {
+        let main = serde_json::json!({
+            "webserver": {"api": {"app_pwhash": "x", "pwhash": "y", "totp_secret": ""}, "port": "80"}
+        });
+        let mut filtered = ConfigFilter::new(&[], FilterMode::OptOut).filter_json(main);
+        strip_api_credentials(&mut filtered);
+        assert!(filtered.pointer("/webserver/api/app_pwhash").is_none());
+        assert!(filtered.pointer("/webserver/api/pwhash").is_none());
+        assert!(filtered.pointer("/webserver/port").is_some());
     }
 }
