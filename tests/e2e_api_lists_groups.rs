@@ -38,6 +38,30 @@ async fn e2e_api_sync_groups_and_lists() -> Result<()> {
     let list_type = derive_list_type(&main.client).await?;
     seed_lists(&main.client, &main_groups, &list_type).await?;
 
+    // Items only on the secondary must be removed by the sync.
+    const ORPHAN_GROUP: &str = "E2E Orphan Group";
+    const ORPHAN_LIST: &str = "https://example.com/blocklist-orphan.txt";
+    secondary
+        .client
+        .add_group(&Group {
+            name: ORPHAN_GROUP.into(),
+            comment: None,
+            enabled: true,
+            id: None,
+        })
+        .await?;
+    secondary
+        .client
+        .add_list(&List {
+            address: ORPHAN_LIST.into(),
+            list_type: list_type.clone(),
+            comment: None,
+            groups: vec![0],
+            enabled: true,
+            id: None,
+        })
+        .await?;
+
     let mut secondary_cfg = secondary.client.config.clone();
     secondary_cfg.sync_mode = Some(SyncMode::Api);
     secondary_cfg.api_sync_options = Some(ApiSyncOptions {
@@ -58,6 +82,14 @@ async fn e2e_api_sync_groups_and_lists() -> Result<()> {
     .await?;
 
     let secondary_groups = secondary.client.get_groups().await?;
+    assert!(!secondary_groups.iter().any(|g| g.name == ORPHAN_GROUP));
+    assert!(secondary_groups.iter().any(|g| g.id == Some(0)));
+    assert!(!secondary
+        .client
+        .get_lists()
+        .await?
+        .iter()
+        .any(|l| l.address == ORPHAN_LIST));
     assert_groups_synced(
         &main_groups,
         &secondary_groups,

@@ -62,8 +62,8 @@ The default config location is `/etc/pihole-sync/config.yaml`; use `--config /pa
     - `sync_config` (optional): filters for `/config`
       - `mode: include` (default) — only listed `filter_keys` are synced; empty list syncs nothing.
       - `mode: exclude` — everything is synced except the listed `filter_keys`; empty list syncs everything.
-    - `sync_groups` (bool, optional): sync group definitions
-    - `sync_lists` (bool, optional): sync allow/block lists; if `sync_groups` is false/omitted, lists are assigned to group 0 and a warning is logged when the main Pi-hole uses other groups.
+    - `sync_groups` (bool, optional): sync group definitions; groups missing on main are removed from the secondary (except the default group 0)
+    - `sync_lists` (bool, optional): sync allow/block lists; lists missing on main are removed from the secondary; if `sync_groups` is false/omitted, lists are assigned to group 0 and a warning is logged when the main Pi-hole uses other groups.
 - Choose how syncs are triggered in `sync.trigger_mode`:
   - `interval` (default): run every `sync.interval` minutes
   - `watch_config_file`: watch `/etc/pihole/pihole.toml` (override via `sync.config_path`)

@@ -443,6 +443,18 @@ impl PiHoleClient {
         Ok(())
     }
 
+    pub async fn delete_group(&self, name: &str) -> Result<()> {
+        let (host, port) = self.instance_label();
+        trace!("[{}:{}] Deleting group {}", host, port, name);
+        self.ensure_authenticated().await?;
+        let url = item_url(&self.base_url, "groups", name)?;
+        self.authorized_request(self.client.delete(url))
+            .await?
+            .error_for_status()
+            .context(format!("Failed to delete group {}", name))?;
+        Ok(())
+    }
+
     pub async fn get_lists(&self) -> Result<Vec<List>> {
         let (host, port) = self.instance_label();
         trace!("[{}:{}] Fetching /lists", host, port);
@@ -494,6 +506,18 @@ impl PiHoleClient {
         .await?
         .error_for_status()
         .context(format!("Failed to update list {}", list.address))?;
+        Ok(())
+    }
+
+    pub async fn delete_list(&self, address: &str, list_type: &str) -> Result<()> {
+        let (host, port) = self.instance_label();
+        trace!("[{}:{}] Deleting list {}", host, port, address);
+        self.ensure_authenticated().await?;
+        let url = item_url(&self.base_url, "lists", address)?;
+        self.authorized_request(self.client.delete(url).query(&[("type", list_type)]))
+            .await?
+            .error_for_status()
+            .context(format!("Failed to delete list {}", address))?;
         Ok(())
     }
 

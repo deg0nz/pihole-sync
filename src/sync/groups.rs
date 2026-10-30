@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
 use tokio::time::sleep;
@@ -53,5 +53,48 @@ pub async fn sync_groups(
         }
     }
 
+    for orphan in orphan_groups(main_groups, secondary_groups) {
+        secondary.delete_group(&orphan.name).await?;
+        sleep(API_WRITE_THROTTLE).await;
+    }
+
     Ok(())
+}
+
+/// Secondary groups missing on main. Group 0 ("Default") is never deleted.
+fn orphan_groups<'a>(main_groups: &[Group], secondary_groups: &'a [Group]) -> Vec<&'a Group> {
+    let main_names: HashSet<&str> = main_groups.iter().map(|g| g.name.as_str()).collect();
+    secondary_groups
+        .iter()
+        .filter(|g| g.id != Some(0) && !main_names.contains(g.name.as_str()))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn group(id: u32, name: &str) -> Group {
+        Group {
+            name: name.into(),
+            comment: None,
+            enabled: true,
+            id: Some(id),
+        }
+    }
+
+    #[test]
+    fn orphan_groups_keeps_default_and_main_groups() {
+        let main = vec![group(0, "Default"), group(1, "kids")];
+        let secondary = vec![
+            group(0, "Renamed default"),
+            group(5, "kids"),
+            group(6, "old"),
+        ];
+        let orphans: Vec<&str> = orphan_groups(&main, &secondary)
+            .iter()
+            .map(|g| g.name.as_str())
+            .collect();
+        assert_eq!(orphans, vec!["old"]);
+    }
 }

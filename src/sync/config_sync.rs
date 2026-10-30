@@ -250,12 +250,8 @@ pub async fn sync_config_api(
 
         // Sync groups
         if api_options.sync_groups.unwrap_or(false) {
-            if payload.main_groups.is_empty() {
-                warn!(
-                    "[{}] Skipping group sync: no groups fetched from main instance",
-                    secondary_pihole.config.host
-                );
-            } else if let Some(groups_hash) = payload.main_groups_hash {
+            // main_*_hash is only set after a successful fetch; an empty fetched set must still sync deletions.
+            if let Some(groups_hash) = payload.main_groups_hash {
                 debug!(
                     "[{}] groups hash on main: {}",
                     secondary_pihole.config.host, groups_hash
@@ -275,7 +271,7 @@ pub async fn sync_config_api(
                 }
             } else {
                 warn!(
-                    "[{}] Skipping group sync: failed to compute groups hash on main instance",
+                    "[{}] Skipping group sync: groups not available from main instance (fetch failed)",
                     secondary_pihole.config.host
                 );
             }
@@ -283,12 +279,7 @@ pub async fn sync_config_api(
 
         // Sync lists
         if api_options.sync_lists.unwrap_or(false) {
-            if payload.main_lists.is_empty() {
-                warn!(
-                    "[{}] Skipping lists sync: no lists available from main instance (fetch failed or skipped)",
-                    secondary_pihole.config.host
-                );
-            } else if let Some(lists_hash) = payload.main_lists_hash {
+            if let Some(lists_hash) = payload.main_lists_hash {
                 debug!(
                     "[{}] lists hash on main: {}",
                     secondary_pihole.config.host, lists_hash
@@ -321,7 +312,7 @@ pub async fn sync_config_api(
                 }
             } else {
                 warn!(
-                    "[{}] Skipping list sync: failed to compute lists hash on main instance",
+                    "[{}] Skipping list sync: lists not available from main instance (fetch failed or skipped)",
                     secondary_pihole.config.host
                 );
             }

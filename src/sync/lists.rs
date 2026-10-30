@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
 use tokio::time::sleep;
@@ -157,5 +157,49 @@ pub async fn sync_lists(
         }
     }
 
+    for orphan in orphan_lists(main_lists, secondary_lists) {
+        secondary
+            .delete_list(&orphan.address, &orphan.list_type)
+            .await?;
+        sleep(API_WRITE_THROTTLE).await;
+    }
+
     Ok(())
+}
+
+/// Secondary lists whose (address, type) is missing on main.
+fn orphan_lists<'a>(main_lists: &[List], secondary_lists: &'a [List]) -> Vec<&'a List> {
+    let main_keys: HashSet<(&str, &str)> = main_lists
+        .iter()
+        .map(|l| (l.address.as_str(), l.list_type.as_str()))
+        .collect();
+    secondary_lists
+        .iter()
+        .filter(|l| !main_keys.contains(&(l.address.as_str(), l.list_type.as_str())))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn list(address: &str, list_type: &str) -> List {
+        List {
+            address: address.into(),
+            list_type: list_type.into(),
+            comment: None,
+            groups: vec![0],
+            enabled: true,
+            id: None,
+        }
+    }
+
+    #[test]
+    fn orphan_lists_matches_on_address_and_type() {
+        let main = vec![list("https://a", "block")];
+        let secondary = vec![list("https://a", "block"), list("https://a", "allow")];
+        let orphans = orphan_lists(&main, &secondary);
+        assert_eq!(orphans.len(), 1);
+        assert_eq!(orphans[0].list_type, "allow");
+    }
 }
