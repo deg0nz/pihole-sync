@@ -21,6 +21,7 @@ pub enum SyncTriggerMode {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SyncConfig {
     #[serde(default = "default_interval_minutes")]
     pub interval: u64,
@@ -37,6 +38,7 @@ pub struct SyncConfig {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct InstanceConfig {
     pub host: String,
     pub schema: String,
@@ -55,6 +57,7 @@ pub struct InstanceConfig {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct ConfigSyncOptions {
     #[serde(default)]
     pub mode: Option<ConfigApiSyncMode>,
@@ -62,6 +65,7 @@ pub struct ConfigSyncOptions {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(deny_unknown_fields)]
 pub struct ApiSyncOptions {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sync_config: Option<ConfigSyncOptions>,
@@ -79,6 +83,7 @@ pub enum ConfigApiSyncMode {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct TeleporterImportOptions {
     #[serde(default = "default_true")]
     pub config: bool,
@@ -89,6 +94,7 @@ pub struct TeleporterImportOptions {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct GravitySyncIncludes {
     #[serde(default = "default_true")]
     pub group: bool,
@@ -107,6 +113,7 @@ pub struct GravitySyncIncludes {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     pub sync: SyncConfig,
     pub main: InstanceConfig,
@@ -229,7 +236,7 @@ impl Config {
         }
 
         let mut config: Config = serde_yaml::from_str(&content)
-            .with_context(|| "Failed to parse config file as YAML")?;
+            .with_context(|| "Failed to parse config file as YAML (unknown or removed fields such as config_api_sync_options must be migrated, see the README)")?;
 
         for secondary in &mut config.secondary {
             resolve_secondary(secondary)?;
@@ -297,5 +304,29 @@ secondary:
         assert_eq!(sc.filter_keys, vec!["dns.hosts"]);
         assert_eq!(cfg.secondary[1].sync_mode(), SyncMode::Teleporter);
         assert!(cfg.secondary.iter().all(|s| !s.accept_invalid_certs));
+    }
+
+    #[test]
+    fn rejects_removed_config_fields() {
+        let yaml = r#"
+sync:
+  cache_location: /tmp/c
+main:
+  host: m
+  schema: https
+  port: 443
+  api_key: k
+secondary:
+  - host: a
+    schema: https
+    port: 443
+    api_key: k
+    config_api_sync_options:
+      filter_keys: []
+"#;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.yaml");
+        fs::write(&path, yaml).unwrap();
+        assert!(Config::load(&path).is_err());
     }
 }
