@@ -1,4 +1,4 @@
-use clap::{arg, Subcommand};
+use clap::Subcommand;
 use tracing::info;
 
 use crate::config::{Config, InstanceConfig};

@@ -50,7 +50,7 @@ async fn wait_for_app_password(client: &mut PiHoleClient) -> Result<AppPassword>
         match client.fetch_app_password(WEBPASSWORD.to_string()).await {
             Ok(app) => return Ok(app),
             Err(err) => {
-                last_err = Some(err.into());
+                last_err = Some(err);
                 sleep(Duration::from_secs(3)).await;
             }
         }

@@ -63,11 +63,7 @@ struct AppPasswordResponse {
 #[derive(Debug, Deserialize)]
 struct Session {
     valid: bool,
-    #[allow(dead_code)]
-    totp: Option<bool>,
     sid: Option<String>,
-    #[allow(dead_code)]
-    validity: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -338,28 +334,24 @@ impl PiHoleClient {
         let (host, port) = self.instance_label();
         trace!("[{}:{}] Patching /config", host, port);
 
-        // dbg!(&config);
-
         self.patch("/config", config).await?;
         Ok(())
     }
 
-    /// Patch the config, wait for the API to become ready again, and verify the change took effect.
+    /// Patch the config, then wait for the API to become ready again (does not verify the change).
     pub async fn patch_config_and_wait_for_ftl_readiness(&self, config: Value) -> Result<()> {
         let (host, port) = self.instance_label();
-        trace!("[{}:{}] Patching /config with verification", host, port);
+        trace!(
+            "[{}:{}] Patching /config and waiting for readiness",
+            host,
+            port
+        );
 
         self.patch_config(serde_json::json!({ "config": config.clone() }))
             .await?;
 
         // Wait for FTL/api to come back after the restart window.
         self.wait_for_ready(Duration::from_secs(10)).await?;
-
-        // let ftl_info = self.get("/info/ftl").await?;
-
-        // let ftl_info: Value = ftl_info.json().await?;
-
-        // dbg!(ftl_info);
 
         Ok(())
     }
@@ -369,8 +361,6 @@ impl PiHoleClient {
         let (host, port) = self.instance_label();
         let start = Instant::now();
         let mut attempt: u32 = 0;
-
-        // sleep(Duration::from_millis(1_000)).await;
 
         loop {
             attempt += 1;

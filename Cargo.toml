@@ -13,7 +13,6 @@ anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dialoguer = "0.12.0"
-indicatif = "0.18.3"
 serde_yaml = "0.9.34"
 notify = "8"
 

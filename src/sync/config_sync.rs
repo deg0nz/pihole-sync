@@ -8,7 +8,7 @@ use crate::pihole::client::{Group, List, PiHoleClient};
 use crate::pihole::config_filter::{ConfigFilter, FilterMode};
 use crate::sync::groups::sync_groups;
 use crate::sync::lists::sync_lists;
-use crate::sync::util::{hash_config, HashTracker};
+use crate::sync::util::{hash_value, HashTracker};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ApiSyncNeeds {
@@ -105,7 +105,7 @@ async fn sync_config_for_secondary(
     let host_key = secondary.config.host.clone();
     let tracker_key = format!("config:{}:{}", host_key, secondary.config.port);
 
-    let filtered_hash = hash_config(&filtered_config)?;
+    let filtered_hash = hash_value(&filtered_config)?;
 
     if !hash_tracker.has_changed(&tracker_key, filtered_hash).await {
         info!(

@@ -15,9 +15,9 @@ use crate::sync::config_sync::{
 };
 use crate::sync::groups::normalize_groups;
 use crate::sync::lists::normalize_lists;
-use crate::sync::teleporter::{download_backup, upload_backup};
+use crate::sync::teleporter::upload_backup;
 use crate::sync::triggers::{run_interval_mode, watch_config_file};
-use crate::sync::util::{hash_value, is_pihole_update_running, HashTracker};
+use crate::sync::util::{hash_bytes, hash_value, is_pihole_update_running, HashTracker};
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct SyncModes {
@@ -99,7 +99,7 @@ impl SyncContext {
             trigger_mode: config.sync.trigger_mode,
             sync_modes,
             sync_state: Arc::new(Mutex::new(SyncState::default())),
-            hash_tracker: HashTracker::new(),
+            hash_tracker: HashTracker::default(),
             cache_location: config.sync.cache_location.clone(),
         })
     }
@@ -262,10 +262,11 @@ impl SyncContext {
         };
 
         if self.sync_modes.teleporter {
-            match download_backup(&self.main_pihole, &self.backup_path).await {
+            info!("Downloading backup from main instance...");
+            match self.main_pihole.download_backup(&self.backup_path).await {
                 Ok(_) => match tokio::fs::read(&self.backup_path).await {
                     Ok(backup_bytes) => {
-                        let backup_hash = teleporter_backup_hash(&backup_bytes);
+                        let backup_hash = hash_bytes(&backup_bytes);
                         let should_upload = Some(backup_hash) != previous_teleporter_hash
                             || !previous_teleporter_applied;
 
@@ -411,15 +412,6 @@ pub(super) fn determine_sync_modes(secondary_piholes: &[PiHoleClient]) -> SyncMo
         .any(|secondary| secondary.config.sync_mode() == SyncMode::Api);
 
     SyncModes { teleporter, api }
-}
-
-fn teleporter_backup_hash(bytes: &[u8]) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::Hasher;
-
-    let mut hasher = DefaultHasher::new();
-    hasher.write(bytes);
-    hasher.finish()
 }
 
 fn build_group_lookup(groups: &[Group]) -> HashMap<u32, String> {

@@ -40,7 +40,6 @@ cd pihole-sync
 cargo build --release
 ```
 
-> Note: On Debian, you may need to install `libssl-dev` and `pkg-config` before building!
 
 ## How to Use
 

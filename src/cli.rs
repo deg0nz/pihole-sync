@@ -16,16 +16,12 @@ use setup::{create_default_config, create_systemd_service};
 use tracing::{info, warn};
 
 #[derive(Parser)]
-#[command(name = "pihole-sync")]
+#[command(name = "pihole-sync", version)]
 #[command(about = "Syncs Pi-Hole v6 instances using REST API", long_about = None)]
 pub struct Cli {
     /// Path to the configuration file
     #[arg(short, long)]
     pub config: Option<String>,
-
-    /// Print version information
-    #[arg(short = 'V', long = "version", action)]
-    pub version: bool,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -67,11 +63,6 @@ enum SetupCommands {
 impl Cli {
     pub async fn parse_args() -> Result<()> {
         let cli = Cli::parse();
-
-        if cli.version {
-            println!("pihole-sync {}", env!("CARGO_PKG_VERSION"));
-            return Ok(());
-        }
 
         if let Some(command) = &cli.command {
             match command {
