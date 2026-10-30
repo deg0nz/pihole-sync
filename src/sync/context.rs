@@ -144,7 +144,7 @@ impl SyncContext {
             self.secondary_piholes
                 .iter()
                 .map(|s| {
-                    let mode = s.config.sync_mode.unwrap_or(SyncMode::Teleporter);
+                    let mode = s.config.sync_mode();
                     format!("{}:{} ({:?})", s.config.host, s.config.port, mode)
                 })
                 .collect::<Vec<_>>()
@@ -156,7 +156,7 @@ impl SyncContext {
                 "[{}:{}] sync_mode={:?}, api_sync_options={:?}",
                 secondary.config.host,
                 secondary.config.port,
-                secondary.config.sync_mode,
+                secondary.config.sync_mode(),
                 secondary.config.api_sync_options
             );
         }
@@ -368,12 +368,11 @@ impl SyncContext {
 
     async fn upload_teleporter_to_secondaries(&self) -> bool {
         let mut all_ok = true;
-        for secondary_pihole in self.secondary_piholes.iter().filter(|secondary| {
-            matches!(
-                secondary.config.sync_mode,
-                Some(SyncMode::Teleporter) | None
-            )
-        }) {
+        for secondary_pihole in self
+            .secondary_piholes
+            .iter()
+            .filter(|secondary| secondary.config.sync_mode() == SyncMode::Teleporter)
+        {
             if let Err(e) = upload_backup(secondary_pihole, &self.backup_path).await {
                 error!(
                     "Failed to upload backup to {}: {:?}",
@@ -404,15 +403,12 @@ impl SyncContext {
 }
 
 pub(super) fn determine_sync_modes(secondary_piholes: &[PiHoleClient]) -> SyncModes {
-    let teleporter = secondary_piholes.iter().any(|secondary| {
-        matches!(
-            secondary.config.sync_mode,
-            Some(SyncMode::Teleporter) | None
-        )
-    });
+    let teleporter = secondary_piholes
+        .iter()
+        .any(|secondary| secondary.config.sync_mode() == SyncMode::Teleporter);
     let api = secondary_piholes
         .iter()
-        .any(|secondary| matches!(secondary.config.sync_mode, Some(SyncMode::Api)));
+        .any(|secondary| secondary.config.sync_mode() == SyncMode::Api);
 
     SyncModes { teleporter, api }
 }

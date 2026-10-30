@@ -4,7 +4,7 @@ mod setup;
 
 use std::path::Path;
 
-use crate::config::Config;
+use crate::config::{Config, SyncMode};
 use crate::constants::DEFAULT_CONFIG_PATH;
 use crate::sync::run_sync;
 
@@ -103,12 +103,10 @@ impl Cli {
                     once,
                     no_initial_sync,
                 } => {
-                    let has_teleporter_secondaries = config.secondary.iter().any(|secondary| {
-                        matches!(
-                            secondary.sync_mode,
-                            Some(crate::config::SyncMode::Teleporter) | None
-                        )
-                    });
+                    let has_teleporter_secondaries = config
+                        .secondary
+                        .iter()
+                        .any(|secondary| secondary.sync_mode() == SyncMode::Teleporter);
                     if has_teleporter_secondaries
                         && matches!(
                             config.sync.trigger_mode,

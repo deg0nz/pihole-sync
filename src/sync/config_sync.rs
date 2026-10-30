@@ -36,7 +36,7 @@ pub struct ApiSyncPayload {
 pub fn determine_api_sync_needs(secondary_piholes: &[PiHoleClient]) -> ApiSyncNeeds {
     let api_secondaries: Vec<&PiHoleClient> = secondary_piholes
         .iter()
-        .filter(|secondary| matches!(secondary.config.sync_mode, Some(SyncMode::Api)))
+        .filter(|secondary| secondary.config.sync_mode() == SyncMode::Api)
         .collect();
     debug!("api_secondaries count: {}", api_secondaries.len());
 
@@ -196,7 +196,7 @@ pub async fn sync_config_api(
 
     let api_secondaries: Vec<&PiHoleClient> = secondary_piholes
         .iter()
-        .filter(|secondary| matches!(secondary.config.sync_mode, Some(SyncMode::Api)))
+        .filter(|secondary| secondary.config.sync_mode() == SyncMode::Api)
         .collect();
 
     if api_secondaries.is_empty() {

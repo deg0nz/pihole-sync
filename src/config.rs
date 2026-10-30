@@ -157,16 +157,21 @@ impl Default for GravitySyncIncludes {
     }
 }
 
-/// Resolve the effective sync mode, apply defaults and validate a secondary instance
-fn resolve_secondary(secondary: &mut InstanceConfig) -> Result<()> {
-    let mode = secondary.sync_mode.unwrap_or(if secondary.api_sync_options.is_some() {
-        SyncMode::Api
-    } else {
-        SyncMode::Teleporter
-    });
-    secondary.sync_mode = Some(mode);
+impl InstanceConfig {
+    /// Effective sync mode: explicit `sync_mode`, else api if `api_sync_options` is set
+    pub fn sync_mode(&self) -> SyncMode {
+        self.sync_mode
+            .unwrap_or(if self.api_sync_options.is_some() {
+                SyncMode::Api
+            } else {
+                SyncMode::Teleporter
+            })
+    }
+}
 
-    match mode {
+/// Apply defaults and validate a secondary instance
+fn resolve_secondary(secondary: &mut InstanceConfig) -> Result<()> {
+    match secondary.sync_mode() {
         SyncMode::Api => {
             let Some(options) = secondary.api_sync_options.as_mut() else {
                 return Err(anyhow::anyhow!(
@@ -280,7 +285,7 @@ secondary:
         let cfg = Config::load(&path).unwrap();
 
         assert!(!cfg.main.accept_invalid_certs);
-        assert_eq!(cfg.secondary[0].sync_mode, Some(SyncMode::Api));
+        assert_eq!(cfg.secondary[0].sync_mode(), SyncMode::Api);
         let sc = cfg.secondary[0]
             .api_sync_options
             .as_ref()
@@ -290,7 +295,7 @@ secondary:
             .unwrap();
         assert_eq!(sc.mode, Some(ConfigApiSyncMode::Include));
         assert_eq!(sc.filter_keys, vec!["dns.hosts"]);
-        assert_eq!(cfg.secondary[1].sync_mode, Some(SyncMode::Teleporter));
+        assert_eq!(cfg.secondary[1].sync_mode(), SyncMode::Teleporter);
         assert!(cfg.secondary.iter().all(|s| !s.accept_invalid_certs));
     }
 }

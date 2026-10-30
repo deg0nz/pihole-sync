@@ -38,10 +38,7 @@ pub async fn sync_teleporter(
     }
 
     for secondary_pihole in secondary_piholes {
-        if !matches!(
-            secondary_pihole.config.sync_mode,
-            Some(SyncMode::Teleporter) | None
-        ) {
+        if secondary_pihole.config.sync_mode() != SyncMode::Teleporter {
             continue;
         }
 
