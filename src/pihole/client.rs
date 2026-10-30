@@ -218,7 +218,6 @@ impl PiHoleClient {
     pub async fn download_backup(&self, output_path: &Path) -> Result<()> {
         let (host, port) = self.instance_label();
         debug!("[{}:{}] Downloading Teleporter backup", host, port);
-        self.ensure_authenticated().await?;
 
         let response = self.get("/teleporter").await?;
         let bytes = response.bytes().await?;
@@ -407,7 +406,6 @@ impl PiHoleClient {
     pub async fn add_group(&self, group: &Group) -> Result<()> {
         let (host, port) = self.instance_label();
         trace!("[{}:{}] Adding group {}", host, port, group.name);
-        self.ensure_authenticated().await?;
         let payload = json!({
             "name": group.name,
             "comment": group.comment,
@@ -430,7 +428,6 @@ impl PiHoleClient {
             existing_name,
             group.name
         );
-        self.ensure_authenticated().await?;
         let payload = json!({
             "name": group.name,
             "comment": group.comment,
@@ -447,7 +444,6 @@ impl PiHoleClient {
     pub async fn delete_group(&self, name: &str) -> Result<()> {
         let (host, port) = self.instance_label();
         trace!("[{}:{}] Deleting group {}", host, port, name);
-        self.ensure_authenticated().await?;
         let url = item_url(&self.base_url, "groups", name)?;
         self.authorized_request(self.client.delete(url))
             .await?
@@ -467,7 +463,6 @@ impl PiHoleClient {
     pub async fn add_list(&self, list: &List) -> Result<()> {
         let (host, port) = self.instance_label();
         trace!("[{}:{}] Adding list {}", host, port, list.address);
-        self.ensure_authenticated().await?;
         let payload = json!({
             "address": list.address,
             "comment": list.comment,
@@ -490,7 +485,6 @@ impl PiHoleClient {
     pub async fn update_list(&self, list: &List) -> Result<()> {
         let (host, port) = self.instance_label();
         trace!("[{}:{}] Updating list {}", host, port, list.address);
-        self.ensure_authenticated().await?;
         let payload = json!({
             "comment": list.comment,
             "groups": list.groups,
@@ -513,7 +507,6 @@ impl PiHoleClient {
     pub async fn delete_list(&self, address: &str, list_type: &str) -> Result<()> {
         let (host, port) = self.instance_label();
         trace!("[{}:{}] Deleting list {}", host, port, address);
-        self.ensure_authenticated().await?;
         let url = item_url(&self.base_url, "lists", address)?;
         self.authorized_request(self.client.delete(url).query(&[("type", list_type)]))
             .await?
@@ -526,10 +519,21 @@ impl PiHoleClient {
     /// HTTP Request helpers
     /////////////////////////
     async fn authorized_request(&self, request: RequestBuilder) -> Result<Response> {
+        if self.session_token.lock().await.is_none() {
+            self.authenticate(None).await?;
+        }
+        // Not cloneable for streaming bodies (multipart); those skip the retry.
+        let retry = request.try_clone();
         let token = self.get_session_token().await.unwrap_or_default();
-        let request = request.header(X_FTL_SID_HEADER, &token);
+        let response = request.header(X_FTL_SID_HEADER, &token).send().await?;
 
-        request.send().await.map_err(Into::into)
+        if let (StatusCode::UNAUTHORIZED, Some(retry)) = (response.status(), retry) {
+            debug!("Session rejected (401), re-authenticating");
+            self.authenticate(None).await?;
+            let token = self.get_session_token().await.unwrap_or_default();
+            return Ok(retry.header(X_FTL_SID_HEADER, &token).send().await?);
+        }
+        Ok(response)
     }
 
     /// **Ensure authentication before making requests**
@@ -549,7 +553,6 @@ impl PiHoleClient {
 
     /// **Make an authenticated GET request**
     async fn get(&self, endpoint: &str) -> Result<Response> {
-        self.ensure_authenticated().await?;
         let url = format!("{}{}", self.base_url, endpoint);
 
         let request = self.authorized_request(self.client.get(&url)).await?;
@@ -559,8 +562,6 @@ impl PiHoleClient {
 
     /// Sends an authenticated POST request to the Pi-hole API.
     async fn post(&self, endpoint: &str) -> Result<Response> {
-        self.ensure_authenticated().await?;
-
         let url = format!("{}{}", self.base_url, endpoint);
 
         self.authorized_request(self.client.post(&url))
@@ -571,8 +572,6 @@ impl PiHoleClient {
 
     /// Sends an authenticated POST request to the Pi-hole API.
     async fn patch(&self, endpoint: &str, data: Value) -> Result<Response> {
-        self.ensure_authenticated().await?;
-
         let url = format!("{}{}", self.base_url, endpoint);
 
         self.authorized_request(self.client.patch(&url).json(&data))
