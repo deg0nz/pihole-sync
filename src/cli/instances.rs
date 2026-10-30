@@ -73,13 +73,9 @@ pub fn run_instances_cmd(
                 api_key,
                 accept_invalid_certs,
                 api_sync_options: None,
-                config_api_sync_options: None,
-                config_sync: None,
                 update_gravity: Some(update_gravity),
                 sync_mode: None,
-                import_options: None,
                 teleporter_sync_options: Some(crate::config::TeleporterImportOptions::default()),
-                teleporter_options: None,
             });
             config.save(config_path)?;
             info!("Instance added successfully!");

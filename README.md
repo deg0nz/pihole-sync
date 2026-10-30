@@ -65,6 +65,7 @@ The default config location is `/etc/pihole-sync/config.yaml`; use `--config /pa
       - `mode: exclude` — everything is synced except the listed `filter_keys`; empty list syncs everything.
     - `sync_groups` (bool, optional): sync group definitions; groups missing on main are removed from the secondary (except the default group 0)
     - `sync_lists` (bool, optional): sync allow/block lists; lists missing on main are removed from the secondary; if `sync_groups` is false/omitted, lists are assigned to group 0 and a warning is logged when the main Pi-hole uses other groups.
+  - Breaking change: the deprecated names `config_sync`, `config_api_sync_options`, `teleporter_options`, `import_options`, `sync_mode: config_api` and `api_sync_options.config` have been removed in this version. Use `api_sync_options.sync_config`, `teleporter_sync_options` and `sync_mode: api` instead; old option fields are now silently ignored.
 - Choose how syncs are triggered in `sync.trigger_mode`:
   - `interval` (default): run every `sync.interval` minutes
   - `watch_config_file`: watch `/etc/pihole/pihole.toml` (override via `sync.config_path`) and `gravity.db` (groups, lists, domains) in the same directory
