@@ -386,3 +386,56 @@ impl Config {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loads_current_format_with_api_and_teleporter_secondaries() {
+        let yaml = r#"
+sync:
+  trigger_mode: interval
+  interval: 60
+  cache_location: /tmp/c
+main:
+  host: main.example.com
+  schema: https
+  port: 443
+  api_key: k
+secondary:
+  - host: a.example.com
+    schema: https
+    port: 443
+    api_key: k
+    sync_mode: api
+    api_sync_options:
+      sync_config:
+        mode: include
+        filter_keys: ["dns.hosts"]
+  - host: b.example.com
+    schema: http
+    port: 80
+    api_key: k
+    sync_mode: teleporter
+"#;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.yaml");
+        fs::write(&path, yaml).unwrap();
+        let cfg = Config::load(&path).unwrap();
+
+        assert!(!cfg.main.accept_invalid_certs);
+        assert_eq!(cfg.secondary[0].sync_mode, Some(SyncMode::Api));
+        let sc = cfg.secondary[0]
+            .api_sync_options
+            .as_ref()
+            .unwrap()
+            .sync_config
+            .as_ref()
+            .unwrap();
+        assert_eq!(sc.mode, Some(ConfigApiSyncMode::Include));
+        assert_eq!(sc.filter_keys, vec!["dns.hosts"]);
+        assert_eq!(cfg.secondary[1].sync_mode, Some(SyncMode::Teleporter));
+        assert!(cfg.secondary.iter().all(|s| !s.accept_invalid_certs));
+    }
+}
