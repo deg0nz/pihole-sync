@@ -388,7 +388,13 @@ impl SyncContext {
                 }
             }
 
-            if api_needs.lists {
+            // Without the group lookup every list would be reassigned to group 0 on secondaries.
+            if api_needs.lists && api_needs.groups && payload.main_groups_hash.is_none() {
+                warn!(
+                    "[{}] Skipping lists fetch because groups could not be fetched from main instance",
+                    self.main_pihole.config.host
+                );
+            } else if api_needs.lists {
                 match self.main_pihole.get_lists().await {
                     Ok(lists) => {
                         payload.main_lists_hash =

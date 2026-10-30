@@ -276,7 +276,7 @@ pub async fn sync_config_api(
         if api_options.sync_lists.unwrap_or(false) {
             if payload.main_lists.is_empty() {
                 warn!(
-                    "[{}] Skipping lists sync: no lists fetched from main instance",
+                    "[{}] Skipping lists sync: no lists available from main instance (fetch failed or skipped)",
                     secondary_pihole.config.host
                 );
             } else if let Some(lists_hash) = payload.main_lists_hash {
