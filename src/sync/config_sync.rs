@@ -90,13 +90,11 @@ async fn sync_config_for_secondary(
     let filter = ConfigFilter::new(&config_sync.filter_keys, filter_mode);
     let filtered_config = filter.filter_json(main_config.clone());
     let host_key = secondary.config.host.clone();
+    let tracker_key = format!("config:{}:{}", host_key, secondary.config.port);
 
     let filtered_hash = hash_config(&filtered_config)?;
 
-    if !hash_tracker
-        .has_changed(&format!("config:{}", host_key), filtered_hash)
-        .await
-    {
+    if !hash_tracker.has_changed(&tracker_key, filtered_hash).await {
         info!(
             "[{}] Skipping config_api sync; filtered config unchanged since last run",
             host_key
@@ -109,9 +107,7 @@ async fn sync_config_for_secondary(
         .patch_config_and_wait_for_ftl_readiness(filtered_config)
         .await?;
 
-    hash_tracker
-        .update(&format!("config:{}", host_key), filtered_hash)
-        .await;
+    hash_tracker.update(&tracker_key, filtered_hash).await;
     Ok(())
 }
 
@@ -122,7 +118,7 @@ async fn sync_groups_for_secondary(
     main_groups_hash: u64,
     hash_tracker: &HashTracker,
 ) -> Result<()> {
-    let host_key = format!("groups:{}", secondary.config.host);
+    let host_key = format!("groups:{}:{}", secondary.config.host, secondary.config.port);
 
     if !hash_tracker.has_changed(&host_key, main_groups_hash).await {
         info!(
@@ -148,7 +144,7 @@ async fn sync_lists_for_secondary(
     sync_groups_enabled: bool,
     hash_tracker: &HashTracker,
 ) -> Result<bool> {
-    let host_key = format!("lists:{}", secondary.config.host);
+    let host_key = format!("lists:{}:{}", secondary.config.host, secondary.config.port);
 
     if !hash_tracker.has_changed(&host_key, main_lists_hash).await {
         info!(

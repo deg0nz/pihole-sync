@@ -20,8 +20,12 @@ pub enum Instances {
         update_gravity: bool,
     },
 
-    /// Remove a secondary instance by hostname
-    Remove { host: String },
+    /// Remove a secondary instance by hostname (and port, if given)
+    Remove {
+        host: String,
+        #[arg(short, long)]
+        port: Option<u16>,
+    },
 }
 
 pub fn run_instances_cmd(
@@ -76,9 +80,11 @@ pub fn run_instances_cmd(
             info!("Instance added successfully!");
         }
 
-        Instances::Remove { host } => {
+        Instances::Remove { host, port } => {
             let original_len = config.secondary.len();
-            config.secondary.retain(|instance| instance.host != host);
+            config.secondary.retain(|instance| {
+                instance.host != host || port.is_some_and(|p| p != instance.port)
+            });
             if config.secondary.len() < original_len {
                 config.save(config_path)?;
                 info!("Instance '{}' removed successfully!", host);
