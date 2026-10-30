@@ -75,6 +75,16 @@ struct BackupUploadProcessedResponse {
     files: Vec<String>,
 }
 
+/// Builds `{base}/{collection}/{item}` with `item` percent-encoded as a single path segment.
+fn item_url(base_url: &str, collection: &str, item: &str) -> Result<reqwest::Url> {
+    let mut url = reqwest::Url::parse(base_url)?;
+    url.path_segments_mut()
+        .map_err(|_| anyhow!("Invalid base URL: {}", base_url))?
+        .push(collection)
+        .push(item);
+    Ok(url)
+}
+
 #[derive(Debug, Clone)]
 pub struct PiHoleClient {
     base_url: String,
@@ -425,8 +435,8 @@ impl PiHoleClient {
             "comment": group.comment,
             "enabled": group.enabled
         });
-        let url = format!("{}/groups/{}", self.base_url, existing_name);
-        self.authorized_request(self.client.put(&url).json(&payload))
+        let url = item_url(&self.base_url, "groups", existing_name)?;
+        self.authorized_request(self.client.put(url).json(&payload))
             .await?
             .error_for_status()
             .context(format!("Failed to update group {}", existing_name))?;
@@ -474,10 +484,10 @@ impl PiHoleClient {
             "enabled": list.enabled,
             "type": list.list_type
         });
-        let url = format!("{}/lists/{}", self.base_url, list.address);
+        let url = item_url(&self.base_url, "lists", &list.address)?;
         self.authorized_request(
             self.client
-                .put(&url)
+                .put(url)
                 .query(&[("type", list.list_type.as_str())])
                 .json(&payload),
         )
@@ -544,5 +554,25 @@ impl PiHoleClient {
             .await?
             .error_for_status()
             .context(format!("PATCH request failed: {}", url))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn item_url_encodes_special_characters() {
+        let url = item_url(
+            "http://pi.hole:80/api",
+            "lists",
+            "https://x.org/hosts?format=adblock#a",
+        )
+        .unwrap();
+        assert_eq!(
+            url.path(),
+            "/api/lists/https:%2F%2Fx.org%2Fhosts%3Fformat=adblock%23a"
+        );
+        assert!(url.query().is_none() && url.fragment().is_none());
     }
 }
