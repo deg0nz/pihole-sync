@@ -56,6 +56,7 @@ The default config location is `/etc/pihole-sync/config.yaml`; use `--config /pa
   - Leave the password free for now. You can generate one via the CLI command `pihole-sync app-password` (add `--config /path/to/config.yaml` if you don't use the default path ;))
   - Add the printed **password hash** to your respective Pi-hole instance under Settings > Webserver and API > webserver.api.app_pwhash  (Refer to Pi-hole API documentation for more information: https://ftl.pi-hole.net/master/docs/#get-/auth/app)
   - Add the printed **app password** to your config file
+- TLS certificates are verified by default. For self-signed Pi-hole certificates set `accept_invalid_certs: true` per instance (or `--accept-invalid-certs` with `instances add`). Breaking change: existing self-signed setups must set this.
 - Per secondary, choose a sync mechanism using `sync_mode`:
   - `teleporter` uses `/teleporter`
   - `api` uses Pi-hole API endpoints (`/config`, `/groups`, `/lists`). Configure via `api_sync_options`:

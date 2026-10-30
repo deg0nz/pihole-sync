@@ -18,6 +18,8 @@ main:
   schema: https
   port: 443
   api_key: YOUR_MAIN_PIHOLE_APP_PASSWORD
+  # Set to true for self-signed certificates (disables TLS verification; default false)
+  # accept_invalid_certs: true
 
 # Secondary Pi-hole instances (targets)
 secondary:
@@ -25,6 +27,7 @@ secondary:
     schema: https
     port: 443
     api_key: YOUR_SECONDARY_PIHOLE_APP_PASSWORD
+    # accept_invalid_certs: true  # for self-signed certificates (default false)
     update_gravity: true
     # Select sync mechanism (mutually exclusive per secondary)
     # - teleporter: sync via Pi-hole teleporter endpoint (/teleporter)
@@ -50,6 +53,7 @@ secondary:
     schema: https
     port: 443
     api_key: YOUR_SECONDARY_PIHOLE_APP_PASSWORD
+    # accept_invalid_certs: true  # for self-signed certificates (default false)
     update_gravity: true
     sync_mode: teleporter
     # Sync includes as described in https://ftl.pi-hole.net/master/docs/#post-/teleporter

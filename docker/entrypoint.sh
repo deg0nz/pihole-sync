@@ -18,6 +18,7 @@ main:
   schema: ${MAIN_SCHEMA:-https}
   port: ${MAIN_PORT:-443}
   api_key: ${MAIN_API_KEY:-YOUR_MAIN_PIHOLE_APP_PASSWORD}
+  accept_invalid_certs: ${MAIN_ACCEPT_INVALID_CERTS:-false}
 
 secondary:
 EOF
@@ -30,6 +31,7 @@ while true; do
   PORT_VAR="SECONDARY_PORT_$i"
   API_KEY_VAR="SECONDARY_API_KEY_$i"
   UPDATE_GRAVITY_VAR="SECONDARY_UPDATE_GRAVITY_$i"
+  ACCEPT_INVALID_CERTS_VAR="SECONDARY_ACCEPT_INVALID_CERTS_$i"
   SYNC_MODE_VAR="SECONDARY_SYNC_MODE_$i"
   CONFIG_MODE_VAR="SECONDARY_CONFIG_MODE_$i"
   FILTER_KEYS_VAR="SECONDARY_FILTER_KEYS_$i"
@@ -45,6 +47,7 @@ while true; do
     schema: ${!SCHEMA_VAR:-https}
     port: ${!PORT_VAR:-443}
     api_key: ${!API_KEY_VAR}
+    accept_invalid_certs: ${!ACCEPT_INVALID_CERTS_VAR:-false}
     update_gravity: ${!UPDATE_GRAVITY_VAR:-true}
     sync_mode: ${!SYNC_MODE_VAR:-teleporter}
 EOF

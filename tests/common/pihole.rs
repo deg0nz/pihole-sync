@@ -75,6 +75,7 @@ where
         schema: "http".into(),
         port: host_port,
         api_key: webpassword.into(),
+        accept_invalid_certs: false,
         update_gravity: Some(false),
         sync_mode: None,
         api_sync_options: None,

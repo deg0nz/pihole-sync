@@ -43,6 +43,9 @@ pub struct InstanceConfig {
     pub schema: String,
     pub port: u16,
     pub api_key: String,
+    /// Accept invalid TLS certificates (e.g. self-signed Pi-hole certs). Disables verification!
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub accept_invalid_certs: bool,
     pub update_gravity: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sync_mode: Option<SyncMode>,

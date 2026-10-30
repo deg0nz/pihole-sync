@@ -18,6 +18,9 @@ pub enum Instances {
         api_key: String,
         #[arg(short, long)]
         update_gravity: bool,
+        /// Accept invalid (e.g. self-signed) TLS certificates
+        #[arg(long)]
+        accept_invalid_certs: bool,
     },
 
     /// Remove a secondary instance by hostname (and port, if given)
@@ -61,12 +64,14 @@ pub fn run_instances_cmd(
             port,
             api_key,
             update_gravity,
+            accept_invalid_certs,
         } => {
             config.secondary.push(InstanceConfig {
                 host,
                 schema,
                 port,
                 api_key,
+                accept_invalid_certs,
                 api_sync_options: None,
                 config_api_sync_options: None,
                 config_sync: None,
