@@ -244,7 +244,7 @@ pub async fn sync_config_api(
                 .await
                 {
                     error!(
-                        "[{}] Config sync failed: {}",
+                        "[{}] Config sync failed: {:#}",
                         secondary_pihole.config.host, e
                     );
                 }
@@ -257,6 +257,7 @@ pub async fn sync_config_api(
         }
 
         // Sync groups
+        let mut groups_failed = false;
         if api_options.sync_groups.unwrap_or(false) {
             // main_*_hash is only set after a successful fetch; an empty fetched set must still sync deletions.
             if let Some(groups_hash) = payload.main_groups_hash {
@@ -272,8 +273,9 @@ pub async fn sync_config_api(
                 )
                 .await
                 {
+                    groups_failed = true;
                     error!(
-                        "[{}] Group sync failed: {}",
+                        "[{}] Group sync failed: {:#}",
                         secondary_pihole.config.host, e
                     );
                 }
@@ -286,7 +288,13 @@ pub async fn sync_config_api(
         }
 
         // Sync lists
-        if api_options.sync_lists.unwrap_or(false) {
+        if api_options.sync_lists.unwrap_or(false) && groups_failed {
+            // Missing groups would move lists to group 0, and the lists hash would then hide it.
+            warn!(
+                "[{}] Skipping list sync because group sync failed; retrying next run",
+                secondary_pihole.config.host
+            );
+        } else if api_options.sync_lists.unwrap_or(false) {
             if let Some(lists_hash) = payload.main_lists_hash {
                 debug!(
                     "[{}] lists hash on main: {}",
@@ -316,7 +324,10 @@ pub async fn sync_config_api(
                             }
                         }
                     }
-                    Err(e) => error!("[{}] List sync failed: {}", secondary_pihole.config.host, e),
+                    Err(e) => error!(
+                        "[{}] List sync failed: {:#}",
+                        secondary_pihole.config.host, e
+                    ),
                 }
             } else {
                 warn!(
