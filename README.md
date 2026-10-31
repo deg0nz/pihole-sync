@@ -3,6 +3,8 @@
 A (currently) quick and dirty utility to sync your *Pi-hole v6* configuration to multiple Pi-hole instances.
 The sync goes one-to-many. One main instance is specified and it's configuration is distributed to all other (secondary) instances.
 
+> Upgrading? See [MIGRATION.md](./MIGRATION.md).
+
 ## Features
 
 - Syncs everything contained in Pi-hole's Teleporter backups
