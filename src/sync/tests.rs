@@ -118,3 +118,54 @@ async fn watch_ignores_unrelated_files_and_coalesces_bursts() -> Result<()> {
     watcher.abort();
     Ok(())
 }
+
+/// Runs `watch_config_api` over a fixed sequence of hashes (last one repeats) and returns
+/// how often a sync was attempted. `synced` decides per attempt whether the sync ran.
+async fn api_watch_attempts(
+    baseline: Option<u64>,
+    hashes: Vec<u64>,
+    synced: fn(usize) -> bool,
+) -> usize {
+    let polls = Arc::new(AtomicUsize::new(0));
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let (p, a) = (polls.clone(), attempts.clone());
+    let watcher = tokio::spawn(watch_config_api(
+        Duration::from_millis(5),
+        baseline,
+        move || {
+            let i = p.fetch_add(1, Ordering::SeqCst);
+            let hash = hashes[i.min(hashes.len() - 1)];
+            async move { Ok(hash) }
+        },
+        move || {
+            let n = a.fetch_add(1, Ordering::SeqCst);
+            async move { Ok(synced(n)) }
+        },
+    ));
+    timeout(Duration::from_secs(2), async {
+        while polls.load(Ordering::SeqCst) < 20 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("poller stalled");
+    watcher.abort();
+    attempts.load(Ordering::SeqCst)
+}
+
+#[tokio::test]
+async fn watch_config_api_syncs_only_on_change() {
+    assert_eq!(api_watch_attempts(Some(1), vec![1], |_| true).await, 0);
+    assert_eq!(
+        api_watch_attempts(Some(1), vec![1, 1, 2], |_| true).await,
+        1
+    );
+    // No baseline (e.g. fetch failed at startup): the first successful poll syncs.
+    assert_eq!(api_watch_attempts(None, vec![1], |_| true).await, 1);
+}
+
+#[tokio::test]
+async fn watch_config_api_retries_skipped_sync() {
+    // First attempt skipped (API not ready): the same hash is retried once, then recorded.
+    assert_eq!(api_watch_attempts(Some(1), vec![2], |n| n > 0).await, 2);
+}

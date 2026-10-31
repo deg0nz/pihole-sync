@@ -42,7 +42,8 @@ impl Daemon {
             .arg(config_path)
             .arg("sync")
             .args(extra_args)
-            .env("RUST_LOG", "info")
+            // Debug for triggers to see idle watch_config_api polls.
+            .env("RUST_LOG", "info,pihole_sync::sync::triggers=debug")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -57,9 +58,9 @@ impl Daemon {
         self.output.lock().unwrap().clone()
     }
 
-    async fn wait_for_log(&mut self, needle: &str) -> Result<()> {
+    async fn wait_for_log(&mut self, needle: &str, timeout: Duration) -> Result<()> {
         let start = Instant::now();
-        while start.elapsed() < Duration::from_secs(30) {
+        while start.elapsed() < timeout {
             if self.log().contains(needle) {
                 return Ok(());
             }
@@ -208,7 +209,8 @@ async fn wait_synced(daemon: &mut Daemon, secondary: &PiHoleClient, tag: &str) -
 }
 
 /// Initial sync, then a later change picked up by the next poll of the same process.
-async fn run_polling_daemon(trigger_mode: SyncTriggerMode) -> Result<()> {
+/// With `check_idle_poll`, also asserts that a poll without main changes does not sync.
+async fn run_polling_daemon(trigger_mode: SyncTriggerMode, check_idle_poll: bool) -> Result<()> {
     common::init_logging();
     ensure_docker_host()?;
     let dir = TempDir::new()?;
@@ -226,18 +228,32 @@ async fn run_polling_daemon(trigger_mode: SyncTriggerMode) -> Result<()> {
     let mut daemon = Daemon::start(&config, &[])?;
     wait_synced(&mut daemon, &secondary.client, "one").await?;
 
+    if check_idle_poll {
+        daemon
+            .wait_for_log("No change detected on main instance", SYNC_TIMEOUT)
+            .await?;
+        assert!(
+            !daemon.log().contains("Detected change on main instance"),
+            "an idle poll must not trigger a sync"
+        );
+    }
+
     change_main(&main.client, "two").await?;
-    wait_synced(&mut daemon, &secondary.client, "two").await
+    wait_synced(&mut daemon, &secondary.client, "two").await?;
+    if check_idle_poll {
+        assert!(daemon.log().contains("Detected change on main instance"));
+    }
+    Ok(())
 }
 
 #[tokio::test]
 async fn e2e_daemon_interval_mode_syncs_later_changes() -> Result<()> {
-    run_polling_daemon(SyncTriggerMode::Interval).await
+    run_polling_daemon(SyncTriggerMode::Interval, false).await
 }
 
 #[tokio::test]
-async fn e2e_daemon_watch_config_api_syncs_later_changes() -> Result<()> {
-    run_polling_daemon(SyncTriggerMode::WatchConfigApi).await
+async fn e2e_daemon_watch_config_api_syncs_only_changes() -> Result<()> {
+    run_polling_daemon(SyncTriggerMode::WatchConfigApi, true).await
 }
 
 /// The main Pi-hole runs in a container; the watcher only needs a local pihole.toml path,
@@ -261,7 +277,9 @@ async fn e2e_daemon_watch_config_file_syncs_on_toml_and_gravity_changes() -> Res
         api_secondary(&secondary.client),
     )?;
     let mut daemon = Daemon::start(&config, &["--no-initial-sync"])?;
-    daemon.wait_for_log("Watching Pi-hole config file").await?;
+    daemon
+        .wait_for_log("Watching Pi-hole config file", Duration::from_secs(30))
+        .await?;
     assert!(
         !is_synced(&secondary.client, "one").await?,
         "--no-initial-sync must not sync before a file change"

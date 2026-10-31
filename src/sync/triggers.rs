@@ -121,3 +121,37 @@ where
 
     Ok(())
 }
+
+/// Polls `fetch_hash` and calls `on_change` only when the hash differs from the last synced one.
+pub async fn watch_config_api<F, Fut, G, GFut>(
+    poll_interval: Duration,
+    mut last_synced_hash: Option<u64>,
+    mut fetch_hash: G,
+    mut on_change: F,
+) -> Result<()>
+where
+    F: FnMut() -> Fut + Send + 'static,
+    // Ok(true) = synced; Ok(false) = skipped, retry on the next poll.
+    Fut: Future<Output = Result<bool>> + Send,
+    G: FnMut() -> GFut + Send + 'static,
+    GFut: Future<Output = Result<u64>> + Send,
+{
+    loop {
+        sleep(poll_interval).await;
+        match fetch_hash().await {
+            Ok(hash) if last_synced_hash == Some(hash) => {
+                debug!("No change detected on main instance (hash {}).", hash)
+            }
+            Ok(hash) => {
+                info!(
+                    "Detected change on main instance (hash {:?} -> {}). Syncing...",
+                    last_synced_hash, hash
+                );
+                if on_change().await? {
+                    last_synced_hash = Some(hash);
+                }
+            }
+            Err(e) => warn!("Failed to fetch change signal from main instance: {:?}", e),
+        }
+    }
+}

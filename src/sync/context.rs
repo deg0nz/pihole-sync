@@ -16,7 +16,7 @@ use crate::sync::config_sync::{
 use crate::sync::groups::normalize_groups;
 use crate::sync::lists::normalize_lists;
 use crate::sync::teleporter::{teleporter_content_hash, upload_backup};
-use crate::sync::triggers::{run_interval_mode, watch_config_file};
+use crate::sync::triggers::{run_interval_mode, watch_config_api, watch_config_file};
 use crate::sync::util::{hash_bytes, hash_value, is_pihole_update_running, HashTracker};
 
 #[derive(Debug, Clone, Copy)]
@@ -119,8 +119,23 @@ impl SyncContext {
             return self.perform_sync().await;
         }
 
+        // Fetched before the initial sync, so changes made during it are picked up by the first poll.
+        let mut baseline = None;
+        if matches!(self.trigger_mode, SyncTriggerMode::WatchConfigApi) {
+            match self.main_change_hash().await {
+                Ok(hash) => baseline = Some(hash),
+                Err(e) => warn!(
+                    "[{}] Failed to fetch change signal for baseline: {:?}",
+                    self.main_pihole.config.host, e
+                ),
+            }
+        }
+
         if !disable_initial_sync {
             self.perform_sync().await?;
+        } else if baseline.is_some() {
+            info!("Seeded baseline change hash from main instance without initial sync.");
+            self.logout_all().await;
         }
 
         // Run the appropriate trigger loop
@@ -129,11 +144,7 @@ impl SyncContext {
                 self.run_interval_loop("interval", self.sync_interval).await
             }
             SyncTriggerMode::WatchConfigFile => self.run_file_watch_loop().await,
-            // Polls with a full sync; per-secondary hashes skip unchanged work.
-            SyncTriggerMode::WatchConfigApi => {
-                self.run_interval_loop("watch_config_api", self.api_poll_interval)
-                    .await
-            }
+            SyncTriggerMode::WatchConfigApi => self.run_api_watch_loop(baseline).await,
         }
     }
 
@@ -220,6 +231,50 @@ impl SyncContext {
             }
         })
         .await
+    }
+
+    async fn run_api_watch_loop(&self, baseline: Option<u64>) -> Result<()> {
+        info!(
+            "Sync trigger mode: watch_config_api. Polling every {} minute(s).",
+            self.api_poll_interval.as_secs() / 60
+        );
+
+        let fetch_ctx = self.clone();
+        let ctx = self.clone();
+        watch_config_api(
+            self.api_poll_interval,
+            baseline,
+            move || {
+                let ctx = fetch_ctx.clone();
+                async move { ctx.main_change_hash().await }
+            },
+            move || {
+                let ctx = ctx.clone();
+                async move {
+                    if let Err(e) = ctx.wait_for_api_readiness().await {
+                        warn!("Skipping triggered sync; Pi-hole API not ready yet, retrying next poll: {}", e);
+                        return Ok(false);
+                    }
+                    ctx.perform_sync().await?;
+                    Ok(true)
+                }
+            },
+        )
+        .await
+    }
+
+    /// Cheap change signal for watch_config_api: everything a sync can copy from main.
+    /// The typed groups/lists drop list fields that gravity runs rewrite without any user
+    /// change (`date_updated`, `number`, `invalid_domains`, `abp_entries`, `status`).
+    async fn main_change_hash(&self) -> Result<u64> {
+        let main = &self.main_pihole;
+        hash_value(&(
+            main.get_config().await?,
+            main.get_groups().await?,
+            main.get_lists().await?,
+            main.get_domains().await?,
+            main.get_clients().await?,
+        ))
     }
 
     async fn wait_for_api_readiness(&self) -> Result<()> {

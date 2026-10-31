@@ -330,14 +330,27 @@ impl PiHoleClient {
     }
 
     pub async fn get_config(&self) -> Result<Value> {
-        let (host, port) = self.instance_label();
-        trace!("[{}:{}] Fetching /config", host, port);
-        let response = self.get("/config").await?;
-        let v: Value = response.json().await?;
+        self.get_field("config").await
+    }
 
-        v.get("config")
-            .cloned()
-            .ok_or_else(|| anyhow!("[{}:{}] Response missing 'config' field", host, port))
+    pub async fn get_domains(&self) -> Result<Value> {
+        self.get_field("domains").await
+    }
+
+    pub async fn get_clients(&self) -> Result<Value> {
+        self.get_field("clients").await
+    }
+
+    /// GET `/<field>` and return its `<field>` member (drops the volatile `took`).
+    async fn get_field(&self, field: &str) -> Result<Value> {
+        let (host, port) = self.instance_label();
+        trace!("[{}:{}] Fetching /{}", host, port, field);
+        let response = self.get(&format!("/{field}")).await?;
+        let mut v: Value = response.json().await?;
+
+        v.get_mut(field)
+            .map(Value::take)
+            .ok_or_else(|| anyhow!("[{}:{}] Response missing '{}' field", host, port, field))
     }
 
     pub async fn patch_config(&self, config: Value) -> Result<()> {

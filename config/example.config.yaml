@@ -3,7 +3,8 @@ sync:
   trigger_mode: interval
   # Interval in minutes between sync operations (also default poll interval for watch_config_api)
   interval: 60
-  # Poll interval in minutes for watch_config_api (falls back to interval when omitted)
+  # Poll interval in minutes for watch_config_api (falls back to interval when omitted).
+  # Each poll fetches config, groups, lists, domains and clients from main; a sync runs only when they changed.
   api_poll_interval: 5
   # Pi-hole config path to watch when trigger_mode is watch_config_file (gravity.db in the same directory is watched too)
   config_path: /etc/pihole/pihole.toml
