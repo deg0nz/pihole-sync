@@ -86,6 +86,11 @@ fn item_url(base_url: &str, collection: &str, item: &str) -> Result<reqwest::Url
     Ok(url)
 }
 
+fn processed_errors(body: &Value) -> Option<&Value> {
+    body.pointer("/processed/errors")
+        .filter(|errors| errors.as_array().is_some_and(|e| !e.is_empty()))
+}
+
 #[derive(Debug, Clone)]
 pub struct PiHoleClient {
     base_url: String,
@@ -432,11 +437,9 @@ impl PiHoleClient {
             "enabled": group.enabled
         });
         let url = format!("{}/groups", self.base_url);
-        self.authorized_request(self.client.post(&url).json(&payload))
-            .await?
-            .error_for_status()
-            .context(format!("Failed to add group {}", group.name))?;
-        Ok(())
+        self.send_write(self.client.post(&url).json(&payload), &group.name)
+            .await
+            .context(format!("Failed to add group {}", group.name))
     }
 
     pub async fn update_group(&self, existing_name: &str, group: &Group) -> Result<()> {
@@ -454,11 +457,9 @@ impl PiHoleClient {
             "enabled": group.enabled
         });
         let url = item_url(&self.base_url, "groups", existing_name)?;
-        self.authorized_request(self.client.put(url).json(&payload))
-            .await?
-            .error_for_status()
-            .context(format!("Failed to update group {}", existing_name))?;
-        Ok(())
+        self.send_write(self.client.put(url).json(&payload), existing_name)
+            .await
+            .context(format!("Failed to update group {}", existing_name))
     }
 
     pub async fn delete_group(&self, name: &str) -> Result<()> {
@@ -490,16 +491,15 @@ impl PiHoleClient {
             "enabled": list.enabled
         });
         let url = format!("{}/lists", self.base_url);
-        self.authorized_request(
+        self.send_write(
             self.client
                 .post(&url)
                 .query(&[("type", list.list_type.as_str())])
                 .json(&payload),
+            &list.address,
         )
-        .await?
-        .error_for_status()
-        .context(format!("Failed to add list {}", list.address))?;
-        Ok(())
+        .await
+        .context(format!("Failed to add list {}", list.address))
     }
 
     pub async fn update_list(&self, list: &List) -> Result<()> {
@@ -512,16 +512,15 @@ impl PiHoleClient {
             "type": list.list_type
         });
         let url = item_url(&self.base_url, "lists", &list.address)?;
-        self.authorized_request(
+        self.send_write(
             self.client
                 .put(url)
                 .query(&[("type", list.list_type.as_str())])
                 .json(&payload),
+            &list.address,
         )
-        .await?
-        .error_for_status()
-        .context(format!("Failed to update list {}", list.address))?;
-        Ok(())
+        .await
+        .context(format!("Failed to update list {}", list.address))
     }
 
     pub async fn delete_list(&self, address: &str, list_type: &str) -> Result<()> {
@@ -533,6 +532,37 @@ impl PiHoleClient {
             .error_for_status()
             .context(format!("Failed to delete list {}", address))?;
         Ok(())
+    }
+
+    /// Sends a group/list write. Pi-hole answers 2xx even when the item was not written
+    /// (e.g. "database is locked"); the failure is only reported in `processed.errors`.
+    async fn send_write(&self, mut request: RequestBuilder, item: &str) -> Result<()> {
+        const ATTEMPTS: u32 = 3;
+        let mut attempt = 1;
+        loop {
+            let retry = request.try_clone();
+            let body: Value = self
+                .authorized_request(request)
+                .await?
+                .error_for_status()?
+                .json()
+                .await?;
+            let Some(errors) = processed_errors(&body) else {
+                return Ok(());
+            };
+            // SQLite busy inside FTL is transient and nothing was written, so resending is safe.
+            match retry {
+                Some(next)
+                    if attempt < ATTEMPTS && errors.to_string().contains("database is locked") =>
+                {
+                    debug!("Pi-hole database locked while writing {}; retrying", item);
+                    sleep(Duration::from_millis(500)).await;
+                    attempt += 1;
+                    request = next;
+                }
+                _ => return Err(anyhow!("Pi-hole rejected {}: {}", item, errors)),
+            }
+        }
     }
 
     /////////////////////////
@@ -604,6 +634,16 @@ impl PiHoleClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn processed_errors_only_reports_non_empty_error_lists() {
+        // Real FTL 201 body for a list that could not be inserted.
+        let failed = json!({"processed": {"errors": [{"item": "https://a", "error": "UNIQUE constraint failed: adlist.address, adlist.type"}], "success": []}});
+        assert!(processed_errors(&failed).is_some());
+        let ok = json!({"processed": {"errors": [], "success": [{"item": "https://a"}]}});
+        assert!(processed_errors(&ok).is_none());
+        assert!(processed_errors(&json!({"took": 0.1})).is_none());
+    }
 
     #[test]
     fn item_url_encodes_special_characters() {
