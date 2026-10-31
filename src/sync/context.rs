@@ -229,8 +229,9 @@ impl SyncContext {
             "[{}] Waiting up to {:?} for Pi-hole API to become ready after trigger",
             self.main_pihole.config.host, timeout
         );
+        // The config file change may be FTL's own write right before it restarts.
         self.main_pihole
-            .wait_for_ready(timeout)
+            .wait_for_ready_after_restart(timeout)
             .await
             .with_context(|| {
                 format!(

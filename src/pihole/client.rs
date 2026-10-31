@@ -12,6 +12,11 @@ use tracing::{debug, info, trace};
 
 use crate::config::InstanceConfig;
 
+/// FTL restarts ~0.3s *after* answering some config changes and Teleporter imports
+/// (others need no restart); watch this long for it to go down before checking readiness.
+const FTL_RESTART_GRACE: Duration = Duration::from_secs(2);
+const FTL_READY_TIMEOUT: Duration = Duration::from_secs(10);
+
 #[derive(Debug, Deserialize)]
 struct AuthResponse {
     session: Session,
@@ -268,6 +273,7 @@ impl PiHoleClient {
                     .files
                     .iter()
                     .for_each(|file| info!("[{}:{}]   {}", host, port, file));
+                self.wait_for_ready_after_restart(FTL_READY_TIMEOUT).await?;
             }
             Err(err) => {
                 debug!("[{}:{}] Error: {}", host, port, err.to_string());
@@ -349,10 +355,24 @@ impl PiHoleClient {
         self.patch_config(serde_json::json!({ "config": config.clone() }))
             .await?;
 
-        // Wait for FTL/api to come back after the restart window.
-        self.wait_for_ready(Duration::from_secs(10)).await?;
+        self.wait_for_ready_after_restart(FTL_READY_TIMEOUT).await
+    }
 
-        Ok(())
+    /// Like `wait_for_ready`, but first gives a pending FTL restart the chance to begin,
+    /// so readiness isn't reported by the process that is about to exit.
+    pub async fn wait_for_ready_after_restart(&self, timeout: Duration) -> Result<()> {
+        let (host, port) = self.instance_label();
+        let probe_url = format!("{}/auth", self.base_url);
+        let deadline = Instant::now() + FTL_RESTART_GRACE;
+        while Instant::now() < deadline {
+            // Any HTTP status means FTL is still (or again) up; only a connection error means it went down.
+            if self.client.get(&probe_url).send().await.is_err() {
+                debug!("[{}:{}] FTL is restarting", host, port);
+                break;
+            }
+            sleep(Duration::from_millis(100)).await;
+        }
+        self.wait_for_ready(timeout).await
     }
 
     /// Wait until the Pi-hole API responds again (covering the FTL restart window).

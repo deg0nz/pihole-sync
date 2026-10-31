@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 use tempfile::TempDir;
 
 mod common;
-use common::pihole::{raw_session, wait_for_ready};
+use common::pihole::raw_session;
 use common::{ensure_docker_host, spawn_pihole};
 
 const MAIN_WEBPASSWORD: &str = "admin-main";
@@ -226,15 +226,6 @@ async fn e2e_api_syncs_two_secondaries_on_same_host() -> Result<()> {
     Ok(())
 }
 
-/// The readiness check can pass before FTL starts restarting, so wait a bit first.
-async fn patch_and_settle(client: &PiHoleClient, config: Value) -> Result<()> {
-    client
-        .patch_config_and_wait_for_ftl_readiness(config)
-        .await?;
-    tokio::time::sleep(Duration::from_secs(3)).await;
-    wait_for_ready(client).await
-}
-
 /// Activates an app password; `app_sudo` lets app-password sessions modify config.
 async fn enable_app_password(
     client: &PiHoleClient,
@@ -242,11 +233,11 @@ async fn enable_app_password(
     app_sudo: bool,
 ) -> Result<String> {
     let app = client.fetch_app_password(webpassword.into()).await?;
-    patch_and_settle(
-        client,
-        json!({ "webserver": { "api": { "app_pwhash": app.hash, "app_sudo": app_sudo } } }),
-    )
-    .await?;
+    client
+        .patch_config_and_wait_for_ftl_readiness(
+            json!({ "webserver": { "api": { "app_pwhash": app.hash, "app_sudo": app_sudo } } }),
+        )
+        .await?;
     client.logout().await?;
     Ok(app.password)
 }
@@ -277,10 +268,10 @@ async fn e2e_config_exclude_all_keeps_secondary_credentials() -> Result<()> {
 
     // Two rounds: the second only arrives if the first left the secondary's API access intact.
     for upstream in ["1.1.1.1", "9.9.9.9"] {
-        patch_and_settle(&main.client, json!({ "dns": { "upstreams": [upstream] } })).await?;
+        main.client
+            .patch_config_and_wait_for_ftl_readiness(json!({ "dns": { "upstreams": [upstream] } }))
+            .await?;
         sync_once(&dir, main.client.config.clone(), vec![sec_cfg.clone()]).await?;
-        tokio::time::sleep(Duration::from_secs(3)).await;
-        wait_for_ready(&app_client).await?;
 
         let config = app_client
             .get_config()
@@ -369,10 +360,6 @@ async fn e2e_teleporter_sync_copies_gravity() -> Result<()> {
     let mut sec_cfg = secondary.client.config.clone();
     sec_cfg.sync_mode = Some(SyncMode::Teleporter);
     sync_once(&dir, main.client.config.clone(), vec![sec_cfg]).await?;
-
-    // The import may restart FTL on the secondary.
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    wait_for_ready(&secondary.client).await?;
 
     assert!(secondary
         .client

@@ -69,14 +69,19 @@ async fn seed_config(client: &PiHoleClient, seed: &SeedData) -> Result<Value> {
     );
 
     client
-        .patch_config_and_wait_for_ftl_readiness(json!({ "config": config }))
+        .patch_config_and_wait_for_ftl_readiness(config)
         .await
         .context("failed to patch config with seed data")?;
 
-    client
+    let seeded = client
         .get_config()
         .await
-        .context("failed to fetch config after seeding")
+        .context("failed to fetch config after seeding")?;
+    assert_eq!(
+        seeded["dns"]["upstreams"], seed.upstreams,
+        "seed not applied"
+    );
+    Ok(seeded)
 }
 
 fn set_path(config: &mut Value, path: &[&str], new_value: Value) {
