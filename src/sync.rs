@@ -7,6 +7,7 @@ pub(crate) mod triggers;
 pub(crate) mod util;
 
 pub use context::SyncContext;
+pub use teleporter::teleporter_content_hash;
 
 use anyhow::Result;
 

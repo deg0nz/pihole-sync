@@ -15,7 +15,7 @@ use crate::sync::config_sync::{
 };
 use crate::sync::groups::normalize_groups;
 use crate::sync::lists::normalize_lists;
-use crate::sync::teleporter::upload_backup;
+use crate::sync::teleporter::{teleporter_content_hash, upload_backup};
 use crate::sync::triggers::{run_interval_mode, watch_config_file};
 use crate::sync::util::{hash_bytes, hash_value, is_pihole_update_running, HashTracker};
 
@@ -266,7 +266,14 @@ impl SyncContext {
             match self.main_pihole.download_backup(&self.backup_path).await {
                 Ok(_) => match tokio::fs::read(&self.backup_path).await {
                     Ok(backup_bytes) => {
-                        let backup_hash = hash_bytes(&backup_bytes);
+                        let backup_hash = teleporter_content_hash(&backup_bytes)
+                            .unwrap_or_else(|e| {
+                                warn!(
+                                    "[{}] Could not read backup archive contents, comparing raw bytes instead: {}",
+                                    self.main_pihole.config.host, e
+                                );
+                                hash_bytes(&backup_bytes)
+                            });
                         let should_upload = Some(backup_hash) != previous_teleporter_hash
                             || !previous_teleporter_applied;
 

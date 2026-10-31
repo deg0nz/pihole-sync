@@ -8,7 +8,7 @@ use pihole_sync::{
         SyncMode, SyncTriggerMode,
     },
     pihole::client::{Group, List, PiHoleClient},
-    sync::run_sync,
+    sync::{run_sync, teleporter_content_hash},
 };
 use serde_json::{json, Value};
 use tempfile::TempDir;
@@ -404,5 +404,25 @@ async fn e2e_teleporter_sync_copies_gravity() -> Result<()> {
             .any(|d| d["domain"] == json!(domain)),
         "domain missing on secondary: {domains}"
     );
+    Ok(())
+}
+
+/// Two downloads of an unchanged main differ in bytes (entry timestamps) but not in content hash.
+#[tokio::test]
+async fn e2e_teleporter_content_hash_stable_for_unchanged_main() -> Result<()> {
+    common::init_logging();
+    ensure_docker_host()?;
+    let dir = TempDir::new()?;
+    let main = spawn_pihole(MAIN_WEBPASSWORD, None, |_| {}).await?;
+
+    let (first, second) = (dir.path().join("a.zip"), dir.path().join("b.zip"));
+    main.client.download_backup(&first).await?;
+    // Zip timestamps have 2s resolution.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    main.client.download_backup(&second).await?;
+
+    let (a, b) = (std::fs::read(&first)?, std::fs::read(&second)?);
+    assert_ne!(a, b, "raw backups expected to differ by entry timestamps");
+    assert_eq!(teleporter_content_hash(&a)?, teleporter_content_hash(&b)?);
     Ok(())
 }
