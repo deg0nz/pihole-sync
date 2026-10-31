@@ -1,6 +1,6 @@
-# Upgrading to 1.0.0-beta.7
+# Upgrading to 1.0.0-beta.8
 
-For upgrades from 1.0.0-beta.6 and earlier. Old configs are rejected on load with a message naming the replacement.
+For upgrades from 1.0.0-beta.7 and earlier. Old configs are rejected on load with a message naming the replacement.
 
 ## Config renames
 
