@@ -388,7 +388,7 @@ impl PiHoleClient {
 
         loop {
             attempt += 1;
-            match self.ensure_authenticated().await {
+            match self.probe_ready().await {
                 Ok(_) => {
                     debug!("[{}:{}] API ready after {} attempt(s)", host, port, attempt);
                     return Ok(());
@@ -418,6 +418,14 @@ impl PiHoleClient {
                 }
             }
         }
+    }
+
+    /// Auth alone is not enough: right after an FTL restart the API answers before gravity.db
+    /// is attached, and `/groups` returns 400 "Database not available".
+    async fn probe_ready(&self) -> Result<()> {
+        self.ensure_authenticated().await?;
+        self.get("/groups").await?;
+        Ok(())
     }
 
     pub async fn get_groups(&self) -> Result<Vec<Group>> {
@@ -605,9 +613,10 @@ impl PiHoleClient {
     async fn get(&self, endpoint: &str) -> Result<Response> {
         let url = format!("{}{}", self.base_url, endpoint);
 
-        let request = self.authorized_request(self.client.get(&url)).await?;
-
-        Ok(request)
+        self.authorized_request(self.client.get(&url))
+            .await?
+            .error_for_status()
+            .context(format!("GET request failed: {}", url))
     }
 
     /// Sends an authenticated POST request to the Pi-hole API.
