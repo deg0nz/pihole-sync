@@ -218,6 +218,57 @@ fn resolve_secondary(secondary: &mut InstanceConfig) -> Result<()> {
     Ok(())
 }
 
+/// Removed field names (or `key: value` pairs) and what replaces them.
+const REMOVED_FIELDS: &[(&str, Option<&str>, &str)] = &[
+    (
+        "config_sync",
+        None,
+        "api_sync_options.sync_config (with sync_mode: api)",
+    ),
+    (
+        "config_api_sync_options",
+        None,
+        "api_sync_options.sync_config (with sync_mode: api)",
+    ),
+    ("teleporter_options", None, "teleporter_sync_options"),
+    ("import_options", None, "teleporter_sync_options"),
+    ("sync_mode", Some("config_api"), "sync_mode: api"),
+];
+
+/// Gives a specific error for removed fields instead of serde's generic unknown-field one.
+fn check_removed_fields(root: &serde_yaml::Value) -> Result<()> {
+    let secondaries = root.get("secondary").and_then(|v| v.as_sequence());
+    for sec in secondaries.into_iter().flatten() {
+        let host = sec.get("host").and_then(|v| v.as_str()).unwrap_or("?");
+        let removed = REMOVED_FIELDS
+            .iter()
+            .map(|&(key, value, new)| (key, value, new))
+            .find(|(key, value, _)| match (sec.get(key), value) {
+                (Some(v), Some(want)) => v.as_str() == Some(want),
+                (Some(_), None) => true,
+                _ => false,
+            })
+            .map(|(key, value, new)| {
+                (
+                    value.map_or(key.to_string(), |v| format!("{key}: {v}")),
+                    new,
+                )
+            })
+            .or_else(|| {
+                sec.get("api_sync_options")?.get("config").map(|_| {
+                    (
+                        "api_sync_options.config".into(),
+                        "api_sync_options.sync_config",
+                    )
+                })
+            });
+        if let Some((old, new)) = removed {
+            anyhow::bail!("[{host}] `{old}` was removed; use `{new}` instead (see MIGRATION.md)");
+        }
+    }
+    Ok(())
+}
+
 impl Config {
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
         let content = fs::read_to_string(&path)
@@ -234,6 +285,8 @@ impl Config {
                 "TOML configs are no longer supported. Please migrate to YAML (e.g. config.yaml)."
             ));
         }
+
+        check_removed_fields(&serde_yaml::from_str(&content).unwrap_or_default())?;
 
         let mut config: Config = serde_yaml::from_str(&content)
             .with_context(|| "Failed to parse config file as YAML (unknown or removed fields such as config_api_sync_options must be migrated, see the README)")?;
@@ -264,6 +317,20 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn removed_fields_name_their_replacement() {
+        let check = |y: &str| check_removed_fields(&serde_yaml::from_str(y).unwrap());
+        let e = check("secondary:\n  - host: a\n    config_sync: {}\n").unwrap_err();
+        assert!(
+            e.to_string().contains("[a]") && e.to_string().contains("api_sync_options.sync_config")
+        );
+        let e = check("secondary:\n  - host: b\n    sync_mode: config_api\n").unwrap_err();
+        assert!(e.to_string().contains("sync_mode: api"));
+        let e = check("secondary:\n  - host: c\n    api_sync_options: {config: {}}\n").unwrap_err();
+        assert!(e.to_string().contains("api_sync_options.config"));
+        assert!(check("secondary:\n  - host: d\n    sync_mode: api\n").is_ok());
+    }
 
     #[test]
     fn loads_current_format_with_api_and_teleporter_secondaries() {
