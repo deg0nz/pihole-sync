@@ -3,6 +3,8 @@
 A (currently) quick and dirty utility to sync your *Pi-hole v6* configuration to multiple Pi-hole instances.
 The sync goes one-to-many. One main instance is specified and it's configuration is distributed to all other (secondary) instances.
 
+> **Beta notice:** pihole-sync is in beta for 1.0. Breaking config or behaviour changes can happen between beta releases; read [CHANGELOG.md](./CHANGELOG.md) and [MIGRATION.md](./MIGRATION.md) before upgrading.
+
 > Upgrading? See [MIGRATION.md](./MIGRATION.md).
 
 ## Features
