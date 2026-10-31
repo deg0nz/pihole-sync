@@ -75,13 +75,21 @@ pub fn determine_api_sync_needs(secondary_piholes: &[PiHoleClient]) -> ApiSyncNe
     }
 }
 
-/// Never push the main's API credentials; they would lock pihole-sync out of the secondary.
+/// Never push the main's API credentials or access settings; they would lock pihole-sync out
+/// of the secondary (`app_sudo=false` rejects config PATCHes from app-password sessions,
+/// a foreign `totp_secret` blocks password logins).
 fn strip_api_credentials(config: &mut serde_json::Value) {
     if let Some(api) = config
         .pointer_mut("/webserver/api")
         .and_then(|v| v.as_object_mut())
     {
-        for key in ["app_pwhash", "pwhash", "password"] {
+        for key in [
+            "app_pwhash",
+            "pwhash",
+            "password",
+            "app_sudo",
+            "totp_secret",
+        ] {
             api.remove(key);
         }
     }
@@ -327,12 +335,15 @@ mod tests {
     #[test]
     fn exclude_mode_with_empty_keys_strips_api_credentials() {
         let main = serde_json::json!({
-            "webserver": {"api": {"app_pwhash": "x", "pwhash": "y", "totp_secret": ""}, "port": "80"}
+            "webserver": {"api": {"app_pwhash": "x", "pwhash": "y", "app_sudo": false, "totp_secret": "", "max_sessions": 16}, "port": "80"}
         });
         let mut filtered = ConfigFilter::new(&[], FilterMode::OptOut).filter_json(main);
         strip_api_credentials(&mut filtered);
         assert!(filtered.pointer("/webserver/api/app_pwhash").is_none());
         assert!(filtered.pointer("/webserver/api/pwhash").is_none());
+        assert!(filtered.pointer("/webserver/api/app_sudo").is_none());
+        assert!(filtered.pointer("/webserver/api/totp_secret").is_none());
+        assert!(filtered.pointer("/webserver/api/max_sessions").is_some());
         assert!(filtered.pointer("/webserver/port").is_some());
     }
 }
