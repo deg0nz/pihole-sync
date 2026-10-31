@@ -18,6 +18,7 @@ main:
   schema: ${MAIN_SCHEMA:-https}
   port: ${MAIN_PORT:-443}
   api_key: ${MAIN_API_KEY:-YOUR_MAIN_PIHOLE_APP_PASSWORD}
+  accept_invalid_certs: ${MAIN_ACCEPT_INVALID_CERTS:-false}
 
 secondary:
 EOF
@@ -30,14 +31,21 @@ while true; do
   PORT_VAR="SECONDARY_PORT_$i"
   API_KEY_VAR="SECONDARY_API_KEY_$i"
   UPDATE_GRAVITY_VAR="SECONDARY_UPDATE_GRAVITY_$i"
+  ACCEPT_INVALID_CERTS_VAR="SECONDARY_ACCEPT_INVALID_CERTS_$i"
   SYNC_MODE_VAR="SECONDARY_SYNC_MODE_$i"
   CONFIG_MODE_VAR="SECONDARY_CONFIG_MODE_$i"
   FILTER_KEYS_VAR="SECONDARY_FILTER_KEYS_$i"
+  SYNC_GROUPS_VAR="SECONDARY_SYNC_GROUPS_$i"
+  SYNC_LISTS_VAR="SECONDARY_SYNC_LISTS_$i"
 
   # Check if this secondary Pi-hole is defined
   if [ -z "${!HOST_VAR}" ]; then
     break
   fi
+
+  SYNC_MODE_VALUE=${!SYNC_MODE_VAR:-teleporter}
+  # config_api is the old name of api
+  [ "$SYNC_MODE_VALUE" = "config_api" ] && SYNC_MODE_VALUE=api
 
   # Add this secondary Pi-hole to the config
   cat >> /etc/pihole-sync/config.yaml << EOF
@@ -45,19 +53,23 @@ while true; do
     schema: ${!SCHEMA_VAR:-https}
     port: ${!PORT_VAR:-443}
     api_key: ${!API_KEY_VAR}
+    accept_invalid_certs: ${!ACCEPT_INVALID_CERTS_VAR:-false}
     update_gravity: ${!UPDATE_GRAVITY_VAR:-true}
-    sync_mode: ${!SYNC_MODE_VAR:-teleporter}
+    sync_mode: ${SYNC_MODE_VALUE}
 EOF
 
-  # If config_api mode is requested, add filter configuration
-  if [ "${!SYNC_MODE_VAR}" = "config_api" ]; then
+  # If api mode is requested, add api sync options
+  if [ "$SYNC_MODE_VALUE" = "api" ]; then
     CONFIG_MODE_VALUE=${!CONFIG_MODE_VAR:-include}
     FILTER_KEYS_VALUE=${!FILTER_KEYS_VAR}
 
     cat >> /etc/pihole-sync/config.yaml << EOF
-    config_api_sync_options:
-      mode: ${CONFIG_MODE_VALUE}
-      filter_keys:
+    api_sync_options:
+      sync_groups: ${!SYNC_GROUPS_VAR:-false}
+      sync_lists: ${!SYNC_LISTS_VAR:-false}
+      sync_config:
+        mode: ${CONFIG_MODE_VALUE}
+        filter_keys:
 EOF
 
     if [ -n "${FILTER_KEYS_VALUE}" ]; then
@@ -65,11 +77,11 @@ EOF
       for KEY in "${FILTER_KEYS[@]}"; do
         TRIMMED_KEY="$(echo "$KEY" | xargs)"
         if [ -n "$TRIMMED_KEY" ]; then
-          echo "        - ${TRIMMED_KEY}" >> /etc/pihole-sync/config.yaml
+          echo "          - ${TRIMMED_KEY}" >> /etc/pihole-sync/config.yaml
         fi
       done
     else
-      echo "        []" >> /etc/pihole-sync/config.yaml
+      echo "          []" >> /etc/pihole-sync/config.yaml
     fi
   fi
 

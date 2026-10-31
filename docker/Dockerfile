@@ -1,24 +1,18 @@
 # Build stage
-FROM rust:latest as builder
+FROM rust:latest AS builder
 
 WORKDIR /usr/src/pihole-sync
 
-# Install required dependencies
-RUN apt-get update && \
-    apt-get install -y pkg-config libssl-dev git && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
-
-# Clone the repository
-RUN git clone https://github.com/deg0nz/pihole-sync.git . && \
-    cargo build --release
+# Build the local source
+COPY . .
+RUN cargo build --release
 
 # Runtime stage
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
 # Install runtime dependencies
 RUN apt-get update && \
-    apt-get install -y ca-certificates libssl3 && \
+    apt-get install -y ca-certificates && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -31,7 +25,7 @@ WORKDIR /opt/pihole-sync
 COPY --from=builder /usr/src/pihole-sync/target/release/pihole-sync .
 
 # Add the startup script
-COPY entrypoint.sh .
+COPY docker/entrypoint.sh .
 RUN chmod +x entrypoint.sh
 
 # Create volumes for persistent data

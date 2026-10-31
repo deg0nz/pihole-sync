@@ -9,7 +9,7 @@ use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::{sync::mpsc, time::sleep};
 use tracing::{debug, info, warn};
 
-use crate::sync::util::{hash_config, FILE_WATCH_DEBOUNCE};
+use crate::sync::util::FILE_WATCH_DEBOUNCE;
 
 pub async fn run_interval_mode<F, Fut>(
     sync_interval: Duration,
@@ -62,7 +62,7 @@ where
 
     watcher.watch(&parent_dir, RecursiveMode::NonRecursive)?;
     info!(
-        "Watching Pi-hole config file for changes: {}",
+        "Watching Pi-hole config file and gravity.db for changes: {}",
         watch_path.display()
     );
 
@@ -79,20 +79,25 @@ where
     F: FnMut() -> Fut + Send + 'static,
     Fut: Future<Output = Result<()>> + Send,
 {
+    // Groups, lists and domains live in gravity.db next to pihole.toml.
+    let targets = [
+        target_path.with_file_name("gravity.db"),
+        canonical_target.with_file_name("gravity.db"),
+        target_path,
+        canonical_target,
+    ];
+    let affects_target = |paths: &[PathBuf]| paths.iter().any(|p| targets.contains(p));
+
     while let Some(event) = rx.recv().await {
         match event {
             Ok(event) => {
-                let affects_target = event
-                    .paths
-                    .iter()
-                    .any(|path| path == &target_path || path == &canonical_target);
-                if !affects_target {
+                if !affects_target(&event.paths) {
                     continue;
                 }
 
                 info!(
                     "Detected change in {:?}. Debouncing for {:?}...",
-                    target_path, FILE_WATCH_DEBOUNCE
+                    event.paths, FILE_WATCH_DEBOUNCE
                 );
                 sleep(FILE_WATCH_DEBOUNCE).await;
 
@@ -100,11 +105,7 @@ where
                 while let Ok(evt) = rx.try_recv() {
                     match evt {
                         Ok(more_event) => {
-                            let hit = more_event
-                                .paths
-                                .iter()
-                                .any(|p| p == &target_path || p == &canonical_target);
-                            if hit {
+                            if affects_target(&more_event.paths) {
                                 debug!("Coalescing additional file change event");
                             }
                         }
@@ -121,45 +122,36 @@ where
     Ok(())
 }
 
+/// Polls `fetch_hash` and calls `on_change` only when the hash differs from the last synced one.
 pub async fn watch_config_api<F, Fut, G, GFut>(
     poll_interval: Duration,
-    last_main_config_hash: Option<u64>,
-    mut fetch_config: G,
+    mut last_synced_hash: Option<u64>,
+    mut fetch_hash: G,
     mut on_change: F,
 ) -> Result<()>
 where
-    F: FnMut(serde_json::Value) -> Fut + Send + 'static,
-    Fut: Future<Output = Result<()>> + Send,
+    F: FnMut() -> Fut + Send + 'static,
+    // Ok(true) = synced; Ok(false) = skipped, retry on the next poll.
+    Fut: Future<Output = Result<bool>> + Send,
     G: FnMut() -> GFut + Send + 'static,
-    GFut: Future<Output = Result<serde_json::Value>> + Send,
+    GFut: Future<Output = Result<u64>> + Send,
 {
-    let mut last_main_config_hash = last_main_config_hash;
-
     loop {
         sleep(poll_interval).await;
-        match fetch_config().await {
-            Ok(main_config) => match hash_config(&main_config) {
-                Ok(current_hash) => {
-                    if last_main_config_hash != Some(current_hash) {
-                        info!(
-                            "Detected config change on main instance (hash {} -> {}). Syncing...",
-                            last_main_config_hash
-                                .map(|h| h.to_string())
-                                .unwrap_or_else(|| "none".into()),
-                            current_hash
-                        );
-                        on_change(main_config.clone()).await?;
-                        last_main_config_hash = Some(current_hash);
-                    } else {
-                        debug!(
-                            "No config change detected on main instance (hash {}).",
-                            current_hash
-                        );
-                    }
+        match fetch_hash().await {
+            Ok(hash) if last_synced_hash == Some(hash) => {
+                debug!("No change detected on main instance (hash {}).", hash)
+            }
+            Ok(hash) => {
+                info!(
+                    "Detected change on main instance (hash {:?} -> {}). Syncing...",
+                    last_synced_hash, hash
+                );
+                if on_change().await? {
+                    last_synced_hash = Some(hash);
                 }
-                Err(e) => warn!("Failed to hash main config: {}", e),
-            },
-            Err(e) => warn!("Failed to fetch config from main instance: {:?}", e),
+            }
+            Err(e) => warn!("Failed to fetch change signal from main instance: {:?}", e),
         }
     }
 }

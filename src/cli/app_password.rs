@@ -1,8 +1,5 @@
-use std::time::Duration;
-
 use anyhow::{Context, Result};
 use dialoguer::{theme::ColorfulTheme, Password, Select};
-use indicatif::ProgressBar;
 
 use crate::{
     config::{Config, InstanceConfig},
@@ -40,10 +37,8 @@ pub async fn acquire_app_password(config_path: &str) -> Result<()> {
 
     let pihole_client = PiHoleClient::new(instances_list[selection].clone())?;
 
-    let bar = ProgressBar::new_spinner();
-    bar.enable_steady_tick(Duration::from_millis(100));
+    println!("Fetching app password...");
     let app_pw: AppPassword = pihole_client.fetch_app_password(password).await?;
-    bar.finish();
 
     println!(
         "🎉 Successfully fetched API app password for {}",

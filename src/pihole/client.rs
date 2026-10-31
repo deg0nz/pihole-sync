@@ -12,6 +12,11 @@ use tracing::{debug, info, trace};
 
 use crate::config::InstanceConfig;
 
+/// FTL restarts ~0.3s *after* answering some config changes and Teleporter imports
+/// (others need no restart); watch this long for it to go down before checking readiness.
+const FTL_RESTART_GRACE: Duration = Duration::from_secs(2);
+const FTL_READY_TIMEOUT: Duration = Duration::from_secs(10);
+
 #[derive(Debug, Deserialize)]
 struct AuthResponse {
     session: Session,
@@ -63,16 +68,27 @@ struct AppPasswordResponse {
 #[derive(Debug, Deserialize)]
 struct Session {
     valid: bool,
-    #[allow(dead_code)]
-    totp: Option<bool>,
     sid: Option<String>,
-    #[allow(dead_code)]
-    validity: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
 struct BackupUploadProcessedResponse {
     files: Vec<String>,
+}
+
+/// Builds `{base}/{collection}/{item}` with `item` percent-encoded as a single path segment.
+fn item_url(base_url: &str, collection: &str, item: &str) -> Result<reqwest::Url> {
+    let mut url = reqwest::Url::parse(base_url)?;
+    url.path_segments_mut()
+        .map_err(|_| anyhow!("Invalid base URL: {}", base_url))?
+        .push(collection)
+        .push(item);
+    Ok(url)
+}
+
+fn processed_errors(body: &Value) -> Option<&Value> {
+    body.pointer("/processed/errors")
+        .filter(|errors| errors.as_array().is_some_and(|e| !e.is_empty()))
 }
 
 #[derive(Debug, Clone)]
@@ -87,10 +103,10 @@ const X_FTL_SID_HEADER: &str = "X-FTL-SID";
 static APP_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
 
 impl PiHoleClient {
-    fn build_client() -> Result<Client> {
+    fn build_client(accept_invalid_certs: bool) -> Result<Client> {
         ClientBuilder::new()
             .user_agent(APP_USER_AGENT)
-            .danger_accept_invalid_certs(true)
+            .danger_accept_invalid_certs(accept_invalid_certs)
             .build()
             .context("Failed to configure HTTP client")
     }
@@ -98,14 +114,14 @@ impl PiHoleClient {
     pub fn new(config: InstanceConfig) -> Result<Self> {
         let base_url = format!("{}://{}:{}/api", config.schema, config.host, config.port);
         Ok(Self {
-            client: Self::build_client()?,
+            client: Self::build_client(config.accept_invalid_certs)?,
             base_url,
             session_token: Arc::new(Mutex::new(None)),
             config,
         })
     }
 
-    fn instance_label(&self) -> (&str, u16) {
+    pub(crate) fn instance_label(&self) -> (&str, u16) {
         (&self.config.host, self.config.port)
     }
 
@@ -116,7 +132,18 @@ impl PiHoleClient {
         let auth_url = format!("{}/auth", self.base_url);
         let body = serde_json::json!({ "password": if let Some(pw) = password { pw } else { self.config.api_key.clone() } });
 
-        let response = self.client.post(&auth_url).json(&body).send().await?;
+        let response = self
+            .client
+            .post(&auth_url)
+            .json(&body)
+            .send()
+            .await
+            .with_context(|| {
+                format!(
+                    "[{}:{}] Authentication request failed (for self-signed certificates, set accept_invalid_certs: true)",
+                    host, port
+                )
+            })?;
 
         let res_json = response.json::<AuthResponse>().await?;
 
@@ -201,7 +228,6 @@ impl PiHoleClient {
     pub async fn download_backup(&self, output_path: &Path) -> Result<()> {
         let (host, port) = self.instance_label();
         debug!("[{}:{}] Downloading Teleporter backup", host, port);
-        self.ensure_authenticated().await?;
 
         let response = self.get("/teleporter").await?;
         let bytes = response.bytes().await?;
@@ -252,6 +278,7 @@ impl PiHoleClient {
                     .files
                     .iter()
                     .for_each(|file| info!("[{}:{}]   {}", host, port, file));
+                self.wait_for_ready_after_restart(FTL_READY_TIMEOUT).await?;
             }
             Err(err) => {
                 debug!("[{}:{}] Error: {}", host, port, err.to_string());
@@ -303,44 +330,67 @@ impl PiHoleClient {
     }
 
     pub async fn get_config(&self) -> Result<Value> {
-        let (host, port) = self.instance_label();
-        trace!("[{}:{}] Fetching /config", host, port);
-        let response = self.get("/config").await?;
-        let v: Value = response.json().await?;
+        self.get_field("config").await
+    }
 
-        v.get("config")
-            .cloned()
-            .ok_or_else(|| anyhow!("[{}:{}] Response missing 'config' field", host, port))
+    pub async fn get_domains(&self) -> Result<Value> {
+        self.get_field("domains").await
+    }
+
+    pub async fn get_clients(&self) -> Result<Value> {
+        self.get_field("clients").await
+    }
+
+    /// GET `/<field>` and return its `<field>` member (drops the volatile `took`).
+    async fn get_field(&self, field: &str) -> Result<Value> {
+        let (host, port) = self.instance_label();
+        trace!("[{}:{}] Fetching /{}", host, port, field);
+        let response = self.get(&format!("/{field}")).await?;
+        let mut v: Value = response.json().await?;
+
+        v.get_mut(field)
+            .map(Value::take)
+            .ok_or_else(|| anyhow!("[{}:{}] Response missing '{}' field", host, port, field))
     }
 
     pub async fn patch_config(&self, config: Value) -> Result<()> {
         let (host, port) = self.instance_label();
         trace!("[{}:{}] Patching /config", host, port);
 
-        // dbg!(&config);
-
         self.patch("/config", config).await?;
         Ok(())
     }
 
-    /// Patch the config, wait for the API to become ready again, and verify the change took effect.
+    /// Patch the config, then wait for the API to become ready again (does not verify the change).
     pub async fn patch_config_and_wait_for_ftl_readiness(&self, config: Value) -> Result<()> {
         let (host, port) = self.instance_label();
-        trace!("[{}:{}] Patching /config with verification", host, port);
+        trace!(
+            "[{}:{}] Patching /config and waiting for readiness",
+            host,
+            port
+        );
 
         self.patch_config(serde_json::json!({ "config": config.clone() }))
             .await?;
 
-        // Wait for FTL/api to come back after the restart window.
-        self.wait_for_ready(Duration::from_secs(10)).await?;
+        self.wait_for_ready_after_restart(FTL_READY_TIMEOUT).await
+    }
 
-        // let ftl_info = self.get("/info/ftl").await?;
-
-        // let ftl_info: Value = ftl_info.json().await?;
-
-        // dbg!(ftl_info);
-
-        Ok(())
+    /// Like `wait_for_ready`, but first gives a pending FTL restart the chance to begin,
+    /// so readiness isn't reported by the process that is about to exit.
+    pub async fn wait_for_ready_after_restart(&self, timeout: Duration) -> Result<()> {
+        let (host, port) = self.instance_label();
+        let probe_url = format!("{}/auth", self.base_url);
+        let deadline = Instant::now() + FTL_RESTART_GRACE;
+        while Instant::now() < deadline {
+            // Any HTTP status means FTL is still (or again) up; only a connection error means it went down.
+            if self.client.get(&probe_url).send().await.is_err() {
+                debug!("[{}:{}] FTL is restarting", host, port);
+                break;
+            }
+            sleep(Duration::from_millis(100)).await;
+        }
+        self.wait_for_ready(timeout).await
     }
 
     /// Wait until the Pi-hole API responds again (covering the FTL restart window).
@@ -349,11 +399,9 @@ impl PiHoleClient {
         let start = Instant::now();
         let mut attempt: u32 = 0;
 
-        // sleep(Duration::from_millis(1_000)).await;
-
         loop {
             attempt += 1;
-            match self.ensure_authenticated().await {
+            match self.probe_ready().await {
                 Ok(_) => {
                     debug!("[{}:{}] API ready after {} attempt(s)", host, port, attempt);
                     return Ok(());
@@ -385,6 +433,14 @@ impl PiHoleClient {
         }
     }
 
+    /// Auth alone is not enough: right after an FTL restart the API answers before gravity.db
+    /// is attached, and `/groups` returns 400 "Database not available".
+    async fn probe_ready(&self) -> Result<()> {
+        self.ensure_authenticated().await?;
+        self.get("/groups").await?;
+        Ok(())
+    }
+
     pub async fn get_groups(&self) -> Result<Vec<Group>> {
         let (host, port) = self.instance_label();
         trace!("[{}:{}] Fetching /groups", host, port);
@@ -396,18 +452,15 @@ impl PiHoleClient {
     pub async fn add_group(&self, group: &Group) -> Result<()> {
         let (host, port) = self.instance_label();
         trace!("[{}:{}] Adding group {}", host, port, group.name);
-        self.ensure_authenticated().await?;
         let payload = json!({
             "name": group.name,
             "comment": group.comment,
             "enabled": group.enabled
         });
         let url = format!("{}/groups", self.base_url);
-        self.authorized_request(self.client.post(&url).json(&payload))
-            .await?
-            .error_for_status()
-            .context(format!("Failed to add group {}", group.name))?;
-        Ok(())
+        self.send_write(self.client.post(&url).json(&payload), &group.name)
+            .await
+            .context(format!("Failed to add group {}", group.name))
     }
 
     pub async fn update_group(&self, existing_name: &str, group: &Group) -> Result<()> {
@@ -419,17 +472,25 @@ impl PiHoleClient {
             existing_name,
             group.name
         );
-        self.ensure_authenticated().await?;
         let payload = json!({
             "name": group.name,
             "comment": group.comment,
             "enabled": group.enabled
         });
-        let url = format!("{}/groups/{}", self.base_url, existing_name);
-        self.authorized_request(self.client.put(&url).json(&payload))
+        let url = item_url(&self.base_url, "groups", existing_name)?;
+        self.send_write(self.client.put(url).json(&payload), existing_name)
+            .await
+            .context(format!("Failed to update group {}", existing_name))
+    }
+
+    pub async fn delete_group(&self, name: &str) -> Result<()> {
+        let (host, port) = self.instance_label();
+        trace!("[{}:{}] Deleting group {}", host, port, name);
+        let url = item_url(&self.base_url, "groups", name)?;
+        self.authorized_request(self.client.delete(url))
             .await?
             .error_for_status()
-            .context(format!("Failed to update group {}", existing_name))?;
+            .context(format!("Failed to delete group {}", name))?;
         Ok(())
     }
 
@@ -444,7 +505,6 @@ impl PiHoleClient {
     pub async fn add_list(&self, list: &List) -> Result<()> {
         let (host, port) = self.instance_label();
         trace!("[{}:{}] Adding list {}", host, port, list.address);
-        self.ensure_authenticated().await?;
         let payload = json!({
             "address": list.address,
             "comment": list.comment,
@@ -452,49 +512,99 @@ impl PiHoleClient {
             "enabled": list.enabled
         });
         let url = format!("{}/lists", self.base_url);
-        self.authorized_request(
+        self.send_write(
             self.client
                 .post(&url)
                 .query(&[("type", list.list_type.as_str())])
                 .json(&payload),
+            &list.address,
         )
-        .await?
-        .error_for_status()
-        .context(format!("Failed to add list {}", list.address))?;
-        Ok(())
+        .await
+        .context(format!("Failed to add list {}", list.address))
     }
 
     pub async fn update_list(&self, list: &List) -> Result<()> {
         let (host, port) = self.instance_label();
         trace!("[{}:{}] Updating list {}", host, port, list.address);
-        self.ensure_authenticated().await?;
         let payload = json!({
             "comment": list.comment,
             "groups": list.groups,
             "enabled": list.enabled,
             "type": list.list_type
         });
-        let url = format!("{}/lists/{}", self.base_url, list.address);
-        self.authorized_request(
+        let url = item_url(&self.base_url, "lists", &list.address)?;
+        self.send_write(
             self.client
-                .put(&url)
+                .put(url)
                 .query(&[("type", list.list_type.as_str())])
                 .json(&payload),
+            &list.address,
         )
-        .await?
-        .error_for_status()
-        .context(format!("Failed to update list {}", list.address))?;
+        .await
+        .context(format!("Failed to update list {}", list.address))
+    }
+
+    pub async fn delete_list(&self, address: &str, list_type: &str) -> Result<()> {
+        let (host, port) = self.instance_label();
+        trace!("[{}:{}] Deleting list {}", host, port, address);
+        let url = item_url(&self.base_url, "lists", address)?;
+        self.authorized_request(self.client.delete(url).query(&[("type", list_type)]))
+            .await?
+            .error_for_status()
+            .context(format!("Failed to delete list {}", address))?;
         Ok(())
+    }
+
+    /// Sends a group/list write. Pi-hole answers 2xx even when the item was not written
+    /// (e.g. "database is locked"); the failure is only reported in `processed.errors`.
+    async fn send_write(&self, mut request: RequestBuilder, item: &str) -> Result<()> {
+        const ATTEMPTS: u32 = 3;
+        let mut attempt = 1;
+        loop {
+            let retry = request.try_clone();
+            let body: Value = self
+                .authorized_request(request)
+                .await?
+                .error_for_status()?
+                .json()
+                .await?;
+            let Some(errors) = processed_errors(&body) else {
+                return Ok(());
+            };
+            // SQLite busy inside FTL is transient and nothing was written, so resending is safe.
+            match retry {
+                Some(next)
+                    if attempt < ATTEMPTS && errors.to_string().contains("database is locked") =>
+                {
+                    debug!("Pi-hole database locked while writing {}; retrying", item);
+                    sleep(Duration::from_millis(500)).await;
+                    attempt += 1;
+                    request = next;
+                }
+                _ => return Err(anyhow!("Pi-hole rejected {}: {}", item, errors)),
+            }
+        }
     }
 
     /////////////////////////
     /// HTTP Request helpers
     /////////////////////////
     async fn authorized_request(&self, request: RequestBuilder) -> Result<Response> {
+        if self.session_token.lock().await.is_none() {
+            self.authenticate(None).await?;
+        }
+        // Not cloneable for streaming bodies (multipart); those skip the retry.
+        let retry = request.try_clone();
         let token = self.get_session_token().await.unwrap_or_default();
-        let request = request.header(X_FTL_SID_HEADER, &token);
+        let response = request.header(X_FTL_SID_HEADER, &token).send().await?;
 
-        request.send().await.map_err(Into::into)
+        if let (StatusCode::UNAUTHORIZED, Some(retry)) = (response.status(), retry) {
+            debug!("Session rejected (401), re-authenticating");
+            self.authenticate(None).await?;
+            let token = self.get_session_token().await.unwrap_or_default();
+            return Ok(retry.header(X_FTL_SID_HEADER, &token).send().await?);
+        }
+        Ok(response)
     }
 
     /// **Ensure authentication before making requests**
@@ -514,18 +624,16 @@ impl PiHoleClient {
 
     /// **Make an authenticated GET request**
     async fn get(&self, endpoint: &str) -> Result<Response> {
-        self.ensure_authenticated().await?;
         let url = format!("{}{}", self.base_url, endpoint);
 
-        let request = self.authorized_request(self.client.get(&url)).await?;
-
-        Ok(request)
+        self.authorized_request(self.client.get(&url))
+            .await?
+            .error_for_status()
+            .context(format!("GET request failed: {}", url))
     }
 
     /// Sends an authenticated POST request to the Pi-hole API.
     async fn post(&self, endpoint: &str) -> Result<Response> {
-        self.ensure_authenticated().await?;
-
         let url = format!("{}{}", self.base_url, endpoint);
 
         self.authorized_request(self.client.post(&url))
@@ -536,13 +644,121 @@ impl PiHoleClient {
 
     /// Sends an authenticated POST request to the Pi-hole API.
     async fn patch(&self, endpoint: &str, data: Value) -> Result<Response> {
-        self.ensure_authenticated().await?;
-
         let url = format!("{}{}", self.base_url, endpoint);
 
         self.authorized_request(self.client.patch(&url).json(&data))
             .await?
             .error_for_status()
             .context(format!("PATCH request failed: {}", url))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// Minimal fake Pi-hole: answers /auth with a session and every other request with the
+    /// next queued body (HTTP 201). Returns the client and a counter of non-auth requests.
+    async fn fake_pihole(bodies: Vec<Value>) -> (PiHoleClient, Arc<std::sync::Mutex<usize>>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let writes = Arc::new(std::sync::Mutex::new(0));
+        let counter = writes.clone();
+        tokio::spawn(async move {
+            let mut bodies = bodies.into_iter();
+            loop {
+                let (mut sock, _) = listener.accept().await.unwrap();
+                let mut buf = vec![0; 8192];
+                let n = sock.read(&mut buf).await.unwrap();
+                let body = if String::from_utf8_lossy(&buf[..n]).starts_with("POST /api/auth ") {
+                    json!({"session": {"valid": true, "sid": "sid"}})
+                } else {
+                    *counter.lock().unwrap() += 1;
+                    bodies.next().unwrap()
+                };
+                let body = body.to_string();
+                let res = format!("HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body);
+                sock.write_all(res.as_bytes()).await.unwrap();
+            }
+        });
+        let client = PiHoleClient::new(InstanceConfig {
+            host: "127.0.0.1".into(),
+            schema: "http".into(),
+            port,
+            api_key: "k".into(),
+            accept_invalid_certs: false,
+            update_gravity: None,
+            sync_mode: None,
+            api_sync_options: None,
+            teleporter_sync_options: None,
+        })
+        .unwrap();
+        (client, writes)
+    }
+
+    fn processed(error: Option<&str>) -> Value {
+        match error {
+            Some(e) => json!({"processed": {"errors": [{"item": "g", "error": e}], "success": []}}),
+            None => json!({"processed": {"errors": [], "success": [{"item": "g"}]}}),
+        }
+    }
+
+    fn group() -> Group {
+        Group {
+            name: "g".into(),
+            comment: None,
+            enabled: true,
+            id: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn write_retries_database_locked_then_succeeds() {
+        let locked = processed(Some("database is locked"));
+        let (client, writes) = fake_pihole(vec![locked, processed(None)]).await;
+        client.add_group(&group()).await.unwrap();
+        assert_eq!(*writes.lock().unwrap(), 2);
+    }
+
+    #[tokio::test]
+    async fn write_fails_on_other_processed_errors_without_retry() {
+        let (client, writes) = fake_pihole(vec![processed(Some("UNIQUE constraint failed"))]).await;
+        let err = format!("{:#}", client.add_group(&group()).await.unwrap_err());
+        assert!(err.contains("UNIQUE constraint failed"), "{err}");
+        assert_eq!(*writes.lock().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn write_gives_up_after_repeated_database_locked() {
+        let locked = processed(Some("database is locked"));
+        let (client, writes) = fake_pihole(vec![locked.clone(), locked.clone(), locked]).await;
+        assert!(client.add_group(&group()).await.is_err());
+        assert_eq!(*writes.lock().unwrap(), 3);
+    }
+
+    #[test]
+    fn processed_errors_only_reports_non_empty_error_lists() {
+        // Real FTL 201 body for a list that could not be inserted.
+        let failed = json!({"processed": {"errors": [{"item": "https://a", "error": "UNIQUE constraint failed: adlist.address, adlist.type"}], "success": []}});
+        assert!(processed_errors(&failed).is_some());
+        let ok = json!({"processed": {"errors": [], "success": [{"item": "https://a"}]}});
+        assert!(processed_errors(&ok).is_none());
+        assert!(processed_errors(&json!({"took": 0.1})).is_none());
+    }
+
+    #[test]
+    fn item_url_encodes_special_characters() {
+        let url = item_url(
+            "http://pi.hole:80/api",
+            "lists",
+            "https://x.org/hosts?format=adblock#a",
+        )
+        .unwrap();
+        assert_eq!(
+            url.path(),
+            "/api/lists/https:%2F%2Fx.org%2Fhosts%3Fformat=adblock%23a"
+        );
+        assert!(url.query().is_none() && url.fragment().is_none());
     }
 }

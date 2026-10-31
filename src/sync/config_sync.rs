@@ -8,7 +8,7 @@ use crate::pihole::client::{Group, List, PiHoleClient};
 use crate::pihole::config_filter::{ConfigFilter, FilterMode};
 use crate::sync::groups::sync_groups;
 use crate::sync::lists::sync_lists;
-use crate::sync::util::{hash_config, HashTracker};
+use crate::sync::util::{hash_value, HashTracker};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ApiSyncNeeds {
@@ -36,7 +36,7 @@ pub struct ApiSyncPayload {
 pub fn determine_api_sync_needs(secondary_piholes: &[PiHoleClient]) -> ApiSyncNeeds {
     let api_secondaries: Vec<&PiHoleClient> = secondary_piholes
         .iter()
-        .filter(|secondary| matches!(secondary.config.sync_mode, Some(SyncMode::Api)))
+        .filter(|secondary| secondary.config.sync_mode() == SyncMode::Api)
         .collect();
     debug!("api_secondaries count: {}", api_secondaries.len());
 
@@ -75,6 +75,26 @@ pub fn determine_api_sync_needs(secondary_piholes: &[PiHoleClient]) -> ApiSyncNe
     }
 }
 
+/// Never push the main's API credentials or access settings; they would lock pihole-sync out
+/// of the secondary (`app_sudo=false` rejects config PATCHes from app-password sessions,
+/// a foreign `totp_secret` blocks password logins).
+fn strip_api_credentials(config: &mut serde_json::Value) {
+    if let Some(api) = config
+        .pointer_mut("/webserver/api")
+        .and_then(|v| v.as_object_mut())
+    {
+        for key in [
+            "app_pwhash",
+            "pwhash",
+            "password",
+            "app_sudo",
+            "totp_secret",
+        ] {
+            api.remove(key);
+        }
+    }
+}
+
 /// Sync configuration to a single secondary instance
 async fn sync_config_for_secondary(
     secondary: &PiHoleClient,
@@ -88,15 +108,14 @@ async fn sync_config_for_secondary(
     };
 
     let filter = ConfigFilter::new(&config_sync.filter_keys, filter_mode);
-    let filtered_config = filter.filter_json(main_config.clone());
+    let mut filtered_config = filter.filter_json(main_config.clone());
+    strip_api_credentials(&mut filtered_config);
     let host_key = secondary.config.host.clone();
+    let tracker_key = format!("config:{}:{}", host_key, secondary.config.port);
 
-    let filtered_hash = hash_config(&filtered_config)?;
+    let filtered_hash = hash_value(&filtered_config)?;
 
-    if !hash_tracker
-        .has_changed(&format!("config:{}", host_key), filtered_hash)
-        .await
-    {
+    if !hash_tracker.has_changed(&tracker_key, filtered_hash).await {
         info!(
             "[{}] Skipping config_api sync; filtered config unchanged since last run",
             host_key
@@ -109,9 +128,7 @@ async fn sync_config_for_secondary(
         .patch_config_and_wait_for_ftl_readiness(filtered_config)
         .await?;
 
-    hash_tracker
-        .update(&format!("config:{}", host_key), filtered_hash)
-        .await;
+    hash_tracker.update(&tracker_key, filtered_hash).await;
     Ok(())
 }
 
@@ -122,7 +139,7 @@ async fn sync_groups_for_secondary(
     main_groups_hash: u64,
     hash_tracker: &HashTracker,
 ) -> Result<()> {
-    let host_key = format!("groups:{}", secondary.config.host);
+    let host_key = format!("groups:{}:{}", secondary.config.host, secondary.config.port);
 
     if !hash_tracker.has_changed(&host_key, main_groups_hash).await {
         info!(
@@ -148,7 +165,7 @@ async fn sync_lists_for_secondary(
     sync_groups_enabled: bool,
     hash_tracker: &HashTracker,
 ) -> Result<bool> {
-    let host_key = format!("lists:{}", secondary.config.host);
+    let host_key = format!("lists:{}:{}", secondary.config.host, secondary.config.port);
 
     if !hash_tracker.has_changed(&host_key, main_lists_hash).await {
         info!(
@@ -187,7 +204,7 @@ pub async fn sync_config_api(
 
     let api_secondaries: Vec<&PiHoleClient> = secondary_piholes
         .iter()
-        .filter(|secondary| matches!(secondary.config.sync_mode, Some(SyncMode::Api)))
+        .filter(|secondary| secondary.config.sync_mode() == SyncMode::Api)
         .collect();
 
     if api_secondaries.is_empty() {
@@ -227,7 +244,7 @@ pub async fn sync_config_api(
                 .await
                 {
                     error!(
-                        "[{}] Config sync failed: {}",
+                        "[{}] Config sync failed: {:#}",
                         secondary_pihole.config.host, e
                     );
                 }
@@ -240,13 +257,10 @@ pub async fn sync_config_api(
         }
 
         // Sync groups
+        let mut groups_failed = false;
         if api_options.sync_groups.unwrap_or(false) {
-            if payload.main_groups.is_empty() {
-                warn!(
-                    "[{}] Skipping group sync: no groups fetched from main instance",
-                    secondary_pihole.config.host
-                );
-            } else if let Some(groups_hash) = payload.main_groups_hash {
+            // main_*_hash is only set after a successful fetch; an empty fetched set must still sync deletions.
+            if let Some(groups_hash) = payload.main_groups_hash {
                 debug!(
                     "[{}] groups hash on main: {}",
                     secondary_pihole.config.host, groups_hash
@@ -259,27 +273,29 @@ pub async fn sync_config_api(
                 )
                 .await
                 {
+                    groups_failed = true;
                     error!(
-                        "[{}] Group sync failed: {}",
+                        "[{}] Group sync failed: {:#}",
                         secondary_pihole.config.host, e
                     );
                 }
             } else {
                 warn!(
-                    "[{}] Skipping group sync: failed to compute groups hash on main instance",
+                    "[{}] Skipping group sync: groups not available from main instance (fetch failed)",
                     secondary_pihole.config.host
                 );
             }
         }
 
         // Sync lists
-        if api_options.sync_lists.unwrap_or(false) {
-            if payload.main_lists.is_empty() {
-                warn!(
-                    "[{}] Skipping lists sync: no lists fetched from main instance",
-                    secondary_pihole.config.host
-                );
-            } else if let Some(lists_hash) = payload.main_lists_hash {
+        if api_options.sync_lists.unwrap_or(false) && groups_failed {
+            // Missing groups would move lists to group 0, and the lists hash would then hide it.
+            warn!(
+                "[{}] Skipping list sync because group sync failed; retrying next run",
+                secondary_pihole.config.host
+            );
+        } else if api_options.sync_lists.unwrap_or(false) {
+            if let Some(lists_hash) = payload.main_lists_hash {
                 debug!(
                     "[{}] lists hash on main: {}",
                     secondary_pihole.config.host, lists_hash
@@ -308,14 +324,64 @@ pub async fn sync_config_api(
                             }
                         }
                     }
-                    Err(e) => error!("[{}] List sync failed: {}", secondary_pihole.config.host, e),
+                    Err(e) => error!(
+                        "[{}] List sync failed: {:#}",
+                        secondary_pihole.config.host, e
+                    ),
                 }
             } else {
                 warn!(
-                    "[{}] Skipping list sync: failed to compute lists hash on main instance",
+                    "[{}] Skipping list sync: lists not available from main instance (fetch failed or skipped)",
                     secondary_pihole.config.host
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exclude_mode_with_empty_keys_strips_api_credentials() {
+        let main = serde_json::json!({
+            "webserver": {"api": {"app_pwhash": "x", "pwhash": "y", "app_sudo": false, "totp_secret": "", "max_sessions": 16}, "port": "80"}
+        });
+        let mut filtered = ConfigFilter::new(&[], FilterMode::OptOut).filter_json(main);
+        strip_api_credentials(&mut filtered);
+        assert!(filtered.pointer("/webserver/api/app_pwhash").is_none());
+        assert!(filtered.pointer("/webserver/api/pwhash").is_none());
+        assert!(filtered.pointer("/webserver/api/app_sudo").is_none());
+        assert!(filtered.pointer("/webserver/api/totp_secret").is_none());
+        assert!(filtered.pointer("/webserver/api/max_sessions").is_some());
+        assert!(filtered.pointer("/webserver/port").is_some());
+    }
+
+    #[test]
+    fn list_sync_needs_groups_and_teleporter_secondaries_need_nothing() {
+        let client = |sync_mode, options: Option<crate::config::ApiSyncOptions>| {
+            PiHoleClient::new(crate::config::InstanceConfig {
+                host: "s".into(),
+                schema: "http".into(),
+                port: 80,
+                api_key: "k".into(),
+                accept_invalid_certs: false,
+                update_gravity: None,
+                sync_mode: Some(sync_mode),
+                api_sync_options: options,
+                teleporter_sync_options: None,
+            })
+            .unwrap()
+        };
+        let lists_only = crate::config::ApiSyncOptions {
+            sync_lists: Some(true),
+            ..Default::default()
+        };
+        // Lists are mapped to secondary groups by name, so the group lookup must be fetched.
+        let needs = determine_api_sync_needs(&[client(SyncMode::Api, Some(lists_only.clone()))]);
+        assert!(needs.lists && needs.groups && !needs.config);
+        let needs = determine_api_sync_needs(&[client(SyncMode::Teleporter, Some(lists_only))]);
+        assert!(!needs.any());
     }
 }

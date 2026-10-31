@@ -24,7 +24,9 @@ services:
       - SECONDARY_API_KEY_1=YOUR_SECONDARY_PIHOLE_APP_PASSWORD
       - SECONDARY_UPDATE_GRAVITY_1=true
       # Optional per-secondary sync mode and filters
-      - SECONDARY_SYNC_MODE_1=config_api # teleporter | config_api
+      - SECONDARY_SYNC_MODE_1=api # teleporter | api
+      - SECONDARY_SYNC_GROUPS_1=false
+      - SECONDARY_SYNC_LISTS_1=false
       - SECONDARY_CONFIG_MODE_1=include # include | exclude
       - SECONDARY_FILTER_KEYS_1=dns.upstreams,webserver.session.timeout
       - SYNC_INTERVAL=60

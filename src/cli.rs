@@ -4,7 +4,7 @@ mod setup;
 
 use std::path::Path;
 
-use crate::config::Config;
+use crate::config::{Config, SyncMode};
 use crate::constants::DEFAULT_CONFIG_PATH;
 use crate::sync::run_sync;
 
@@ -16,16 +16,12 @@ use setup::{create_default_config, create_systemd_service};
 use tracing::{info, warn};
 
 #[derive(Parser)]
-#[command(name = "pihole-sync")]
+#[command(name = "pihole-sync", version)]
 #[command(about = "Syncs Pi-Hole v6 instances using REST API", long_about = None)]
 pub struct Cli {
     /// Path to the configuration file
     #[arg(short, long)]
     pub config: Option<String>,
-
-    /// Print version information
-    #[arg(short = 'V', long = "version", action)]
-    pub version: bool,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -68,11 +64,6 @@ impl Cli {
     pub async fn parse_args() -> Result<()> {
         let cli = Cli::parse();
 
-        if cli.version {
-            println!("pihole-sync {}", env!("CARGO_PKG_VERSION"));
-            return Ok(());
-        }
-
         if let Some(command) = &cli.command {
             match command {
                 Commands::Setup {
@@ -103,12 +94,10 @@ impl Cli {
                     once,
                     no_initial_sync,
                 } => {
-                    let has_teleporter_secondaries = config.secondary.iter().any(|secondary| {
-                        matches!(
-                            secondary.sync_mode,
-                            Some(crate::config::SyncMode::Teleporter) | None
-                        )
-                    });
+                    let has_teleporter_secondaries = config
+                        .secondary
+                        .iter()
+                        .any(|secondary| secondary.sync_mode() == SyncMode::Teleporter);
                     if has_teleporter_secondaries
                         && matches!(
                             config.sync.trigger_mode,

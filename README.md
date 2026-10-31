@@ -3,6 +3,10 @@
 A (currently) quick and dirty utility to sync your *Pi-hole v6* configuration to multiple Pi-hole instances.
 The sync goes one-to-many. One main instance is specified and it's configuration is distributed to all other (secondary) instances.
 
+> **Beta notice:** pihole-sync is in beta for 1.0. Breaking config or behaviour changes can happen between beta releases; read [CHANGELOG.md](./CHANGELOG.md) and [MIGRATION.md](./MIGRATION.md) before upgrading.
+
+> Upgrading? See [MIGRATION.md](./MIGRATION.md).
+
 ## Features
 
 - Syncs everything contained in Pi-hole's Teleporter backups
@@ -40,7 +44,6 @@ cd pihole-sync
 cargo build --release
 ```
 
-> Note: On Debian, you may need to install `libssl-dev` and `pkg-config` before building!
 
 ## How to Use
 
@@ -56,19 +59,24 @@ The default config location is `/etc/pihole-sync/config.yaml`; use `--config /pa
   - Leave the password free for now. You can generate one via the CLI command `pihole-sync app-password` (add `--config /path/to/config.yaml` if you don't use the default path ;))
   - Add the printed **password hash** to your respective Pi-hole instance under Settings > Webserver and API > webserver.api.app_pwhash  (Refer to Pi-hole API documentation for more information: https://ftl.pi-hole.net/master/docs/#get-/auth/app)
   - Add the printed **app password** to your config file
+- TLS certificates are verified by default. For self-signed Pi-hole certificates set `accept_invalid_certs: true` per instance (or `--accept-invalid-certs` with `instances add`). Breaking change: existing self-signed setups must set this.
 - Per secondary, choose a sync mechanism using `sync_mode`:
   - `teleporter` uses `/teleporter`
+    - The backup is only re-imported when its contents changed since the last run (archive timestamps are ignored).
   - `api` uses Pi-hole API endpoints (`/config`, `/groups`, `/lists`). Configure via `api_sync_options`:
     - `sync_config` (optional): filters for `/config`
       - `mode: include` (default) — only listed `filter_keys` are synced; empty list syncs nothing.
       - `mode: exclude` — everything is synced except the listed `filter_keys`; empty list syncs everything.
-    - `sync_groups` (bool, optional): sync group definitions
-    - `sync_lists` (bool, optional): sync allow/block lists; if `sync_groups` is false/omitted, lists are assigned to group 0 and a warning is logged when the main Pi-hole uses other groups.
+      - With an app password, Pi-hole only lets the session change config if `webserver.api.app_sudo = true` is set on each secondary.
+      - The secondary's own `webserver.api` credentials (`password`, `pwhash`, `app_pwhash`, `app_sudo`, `totp_secret`) are never overwritten.
+    - `sync_groups` (bool, optional): sync group definitions; groups missing on main are removed from the secondary (except the default group 0)
+    - `sync_lists` (bool, optional): sync allow/block lists; lists missing on main are removed from the secondary; if `sync_groups` is false/omitted, lists are assigned to group 0 and a warning is logged when the main Pi-hole uses other groups.
+  - Breaking change: the deprecated names `config_sync`, `config_api_sync_options`, `teleporter_options`, `import_options`, `sync_mode: config_api` and `api_sync_options.config` have been removed in this version. Use `api_sync_options.sync_config`, `teleporter_sync_options` and `sync_mode: api` instead; configs containing these (or any other unknown) fields are rejected on load and must be migrated.
 - Choose how syncs are triggered in `sync.trigger_mode`:
   - `interval` (default): run every `sync.interval` minutes
-  - `watch_config_file`: watch `/etc/pihole/pihole.toml` (override via `sync.config_path`)
-  - `watch_config_api`: poll `/api/config` every `sync.api_poll_interval` minutes (falls back to `sync.interval`)
-- For watch-based triggers, set `sync.trigger_api_readiness_timeout_secs` (default `60`) to control how long to wait for Pi-hole's API to come back after a config change before running the sync.
+  - `watch_config_file`: watch `/etc/pihole/pihole.toml` (override via `sync.config_path`) and `gravity.db` (groups, lists, domains) in the same directory
+  - `watch_config_api`: every `sync.api_poll_interval` minutes (falls back to `sync.interval`), fetch config, groups, lists, domains and clients from the main instance and sync only when they changed since the last sync (gravity-run list stats like `number`/`status` are ignored). With `--no-initial-sync` the current state is taken as the baseline, so nothing syncs until main changes.
+- For `watch_config_file` and `watch_config_api`, set `sync.trigger_api_readiness_timeout_secs` (default `60`) to control how long to wait for Pi-hole's API to come back after a config change before running the sync.
 - Run `pihole-sync sync` for running in sync mode (sessions are logged out after each run to avoid occupying Pi-hole session slots)
   - Use `pihole-sync sync --once` to run the sync once and exit.
   - Use `pihole-sync sync --no-initial-sync` to start watchers without an initial sync.

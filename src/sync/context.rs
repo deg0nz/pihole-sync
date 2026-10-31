@@ -15,9 +15,9 @@ use crate::sync::config_sync::{
 };
 use crate::sync::groups::normalize_groups;
 use crate::sync::lists::normalize_lists;
-use crate::sync::teleporter::{download_backup, upload_backup};
+use crate::sync::teleporter::{teleporter_content_hash, upload_backup};
 use crate::sync::triggers::{run_interval_mode, watch_config_api, watch_config_file};
-use crate::sync::util::{hash_config, hash_value, is_pihole_update_running, HashTracker};
+use crate::sync::util::{hash_bytes, hash_value, is_pihole_update_running, HashTracker};
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct SyncModes {
@@ -27,7 +27,6 @@ pub(super) struct SyncModes {
 
 #[derive(Debug, Default)]
 struct SyncState {
-    last_main_config_hash: Option<u64>,
     last_teleporter_hash: Option<u64>,
     last_teleporter_applied: bool,
 }
@@ -100,7 +99,7 @@ impl SyncContext {
             trigger_mode: config.sync.trigger_mode,
             sync_modes,
             sync_state: Arc::new(Mutex::new(SyncState::default())),
-            hash_tracker: HashTracker::new(),
+            hash_tracker: HashTracker::default(),
             cache_location: config.sync.cache_location.clone(),
         })
     }
@@ -117,17 +116,35 @@ impl SyncContext {
 
         if run_once {
             info!("Sync trigger mode: run-once (no watcher).");
-            return self.perform_sync(None).await;
+            return self.perform_sync().await;
         }
 
-        // Handle initial sync or baseline seeding
-        self.handle_initial_sync(disable_initial_sync).await?;
+        // Fetched before the initial sync, so changes made during it are picked up by the first poll.
+        let mut baseline = None;
+        if matches!(self.trigger_mode, SyncTriggerMode::WatchConfigApi) {
+            match self.main_change_hash().await {
+                Ok(hash) => baseline = Some(hash),
+                Err(e) => warn!(
+                    "[{}] Failed to fetch change signal for baseline: {:?}",
+                    self.main_pihole.config.host, e
+                ),
+            }
+        }
+
+        if !disable_initial_sync {
+            self.perform_sync().await?;
+        } else if baseline.is_some() {
+            info!("Seeded baseline change hash from main instance without initial sync.");
+            self.logout_all().await;
+        }
 
         // Run the appropriate trigger loop
         match self.trigger_mode {
-            SyncTriggerMode::Interval => self.run_interval_loop().await,
+            SyncTriggerMode::Interval => {
+                self.run_interval_loop("interval", self.sync_interval).await
+            }
             SyncTriggerMode::WatchConfigFile => self.run_file_watch_loop().await,
-            SyncTriggerMode::WatchConfigApi => self.run_api_watch_loop().await,
+            SyncTriggerMode::WatchConfigApi => self.run_api_watch_loop(baseline).await,
         }
     }
 
@@ -138,7 +155,7 @@ impl SyncContext {
             self.secondary_piholes
                 .iter()
                 .map(|s| {
-                    let mode = s.config.sync_mode.unwrap_or(SyncMode::Teleporter);
+                    let mode = s.config.sync_mode();
                     format!("{}:{} ({:?})", s.config.host, s.config.port, mode)
                 })
                 .collect::<Vec<_>>()
@@ -150,7 +167,7 @@ impl SyncContext {
                 "[{}:{}] sync_mode={:?}, api_sync_options={:?}",
                 secondary.config.host,
                 secondary.config.port,
-                secondary.config.sync_mode,
+                secondary.config.sync_mode(),
                 secondary.config.api_sync_options
             );
         }
@@ -173,48 +190,19 @@ impl SyncContext {
         Ok(())
     }
 
-    async fn handle_initial_sync(&self, disable_initial_sync: bool) -> Result<()> {
-        if !disable_initial_sync {
-            self.perform_sync(None).await?;
-        } else if matches!(self.trigger_mode, SyncTriggerMode::WatchConfigApi) {
-            // Seed baseline without running an initial sync so we don't sync immediately.
-            self.seed_baseline_hash().await;
-        }
-        Ok(())
-    }
-
-    async fn seed_baseline_hash(&self) {
-        match self.main_pihole.get_config().await {
-            Ok(main_config) => {
-                if let Ok(hash) = hash_config(&main_config) {
-                    let mut state = self.sync_state.lock().await;
-                    state.last_main_config_hash = Some(hash);
-                    info!(
-                        "Seeded baseline config hash from main instance without initial sync: {}",
-                        hash
-                    );
-                }
-            }
-            Err(e) => warn!(
-                "[{}] Failed to fetch config for baseline: {:?}",
-                self.main_pihole.config.host, e
-            ),
-        }
-        self.logout_all().await;
-    }
-
-    async fn run_interval_loop(&self) -> Result<()> {
+    async fn run_interval_loop(&self, mode: &str, interval: Duration) -> Result<()> {
         info!(
-            "Sync trigger mode: interval. Running every {} minute(s).",
-            self.sync_interval.as_secs() / 60
+            "Sync trigger mode: {}. Polling every {} minute(s).",
+            mode,
+            interval.as_secs() / 60
         );
 
         let ctx = self.clone();
         run_interval_mode(
-            self.sync_interval,
+            interval,
             move || {
                 let ctx = ctx.clone();
-                async move { ctx.perform_sync(None).await }
+                async move { ctx.perform_sync().await }
             },
             None,
         )
@@ -232,48 +220,72 @@ impl SyncContext {
             let ctx = ctx.clone();
             async move {
                 if is_pihole_update_running().await? {
-                    warn!("Detected running \"pihole -up\"; skipping sync until update completes.");
+                    warn!("Detected running \"pihole -up\"; skipping sync, the change will be picked up at the next file change.");
                     return Ok(());
                 }
                 if let Err(e) = ctx.wait_for_api_readiness().await {
-                    warn!("Skipping triggered sync; Pi-hole API not ready yet: {}", e);
+                    warn!("Skipping triggered sync; Pi-hole API not ready yet, the change will be picked up at the next file change: {}", e);
                     return Ok(());
                 }
-                ctx.perform_sync(None).await
+                ctx.perform_sync().await
             }
         })
         .await
     }
 
-    async fn run_api_watch_loop(&self) -> Result<()> {
+    async fn run_api_watch_loop(&self, baseline: Option<u64>) -> Result<()> {
         info!(
             "Sync trigger mode: watch_config_api. Polling every {} minute(s).",
             self.api_poll_interval.as_secs() / 60
         );
 
-        let baseline = self.sync_state.lock().await.last_main_config_hash;
-        let main_for_fetch = self.main_pihole.clone();
+        let fetch_ctx = self.clone();
         let ctx = self.clone();
-
         watch_config_api(
             self.api_poll_interval,
             baseline,
             move || {
-                let main = main_for_fetch.clone();
-                async move { main.get_config().await }
+                let ctx = fetch_ctx.clone();
+                async move { ctx.main_change_hash().await }
             },
-            move |main_config| {
+            move || {
                 let ctx = ctx.clone();
                 async move {
                     if let Err(e) = ctx.wait_for_api_readiness().await {
-                        warn!("Skipping triggered sync; Pi-hole API not ready yet: {}", e);
-                        return Ok(());
+                        warn!("Skipping triggered sync; Pi-hole API not ready yet, retrying next poll: {}", e);
+                        return Ok(false);
                     }
-                    ctx.perform_sync(Some(main_config)).await
+                    ctx.perform_sync().await?;
+                    Ok(true)
                 }
             },
         )
         .await
+    }
+
+    /// Cheap change signal for watch_config_api: everything a sync can copy from main.
+    /// The typed groups/lists drop list fields that gravity runs rewrite without any user
+    /// change (`date_updated`, `number`, `invalid_domains`, `abp_entries`, `status`).
+    async fn main_change_hash(&self) -> Result<u64> {
+        let main = &self.main_pihole;
+        let hash = async {
+            hash_value(&(
+                main.get_config().await?,
+                main.get_groups().await?,
+                main.get_lists().await?,
+                main.get_domains().await?,
+                main.get_clients().await?,
+            ))
+        }
+        .await;
+        // Free the session slot; a triggered sync re-authenticates.
+        if let Err(e) = main.logout().await {
+            warn!(
+                "[{}] Failed to logout from main instance: {:?}",
+                main.config.host, e
+            );
+        }
+        hash
     }
 
     async fn wait_for_api_readiness(&self) -> Result<()> {
@@ -283,8 +295,9 @@ impl SyncContext {
             "[{}] Waiting up to {:?} for Pi-hole API to become ready after trigger",
             self.main_pihole.config.host, timeout
         );
+        // The config file change may be FTL's own write right before it restarts.
         self.main_pihole
-            .wait_for_ready(timeout)
+            .wait_for_ready_after_restart(timeout)
             .await
             .with_context(|| {
                 format!(
@@ -309,19 +322,25 @@ impl SyncContext {
         Ok(())
     }
 
-    async fn perform_sync(&self, provided_main_config: Option<serde_json::Value>) -> Result<()> {
-        let mut main_config = provided_main_config;
-
+    async fn perform_sync(&self) -> Result<()> {
         let (previous_teleporter_hash, previous_teleporter_applied) = {
             let state = self.sync_state.lock().await;
             (state.last_teleporter_hash, state.last_teleporter_applied)
         };
 
         if self.sync_modes.teleporter {
-            match download_backup(&self.main_pihole, &self.backup_path).await {
+            info!("Downloading backup from main instance...");
+            match self.main_pihole.download_backup(&self.backup_path).await {
                 Ok(_) => match tokio::fs::read(&self.backup_path).await {
                     Ok(backup_bytes) => {
-                        let backup_hash = teleporter_backup_hash(&backup_bytes);
+                        let backup_hash = teleporter_content_hash(&backup_bytes)
+                            .unwrap_or_else(|e| {
+                                warn!(
+                                    "[{}] Could not read backup archive contents, comparing raw bytes instead: {}",
+                                    self.main_pihole.config.host, e
+                                );
+                                hash_bytes(&backup_bytes)
+                            });
                         let should_upload = Some(backup_hash) != previous_teleporter_hash
                             || !previous_teleporter_applied;
 
@@ -357,7 +376,8 @@ impl SyncContext {
         };
 
         if self.sync_modes.api && api_needs.any() {
-            if api_needs.config && main_config.is_none() {
+            let mut main_config = None;
+            if api_needs.config {
                 match self.main_pihole.get_config().await {
                     Ok(config_value) => main_config = Some(config_value),
                     Err(e) => {
@@ -370,7 +390,7 @@ impl SyncContext {
             }
 
             let mut payload = ApiSyncPayload {
-                main_config: main_config.clone(),
+                main_config,
                 ..Default::default()
             };
 
@@ -388,7 +408,13 @@ impl SyncContext {
                 }
             }
 
-            if api_needs.lists {
+            // Without the group lookup every list would be reassigned to group 0 on secondaries.
+            if api_needs.lists && api_needs.groups && payload.main_groups_hash.is_none() {
+                warn!(
+                    "[{}] Skipping lists fetch because groups could not be fetched from main instance",
+                    self.main_pihole.config.host
+                );
+            } else if api_needs.lists {
                 match self.main_pihole.get_lists().await {
                     Ok(lists) => {
                         payload.main_lists_hash =
@@ -411,23 +437,17 @@ impl SyncContext {
             .await;
         }
 
-        if let Some(hash) = main_config.as_ref().and_then(|cfg| hash_config(cfg).ok()) {
-            let mut state = self.sync_state.lock().await;
-            state.last_main_config_hash = Some(hash);
-        }
-
         self.logout_all().await;
         Ok(())
     }
 
     async fn upload_teleporter_to_secondaries(&self) -> bool {
         let mut all_ok = true;
-        for secondary_pihole in self.secondary_piholes.iter().filter(|secondary| {
-            matches!(
-                secondary.config.sync_mode,
-                Some(SyncMode::Teleporter) | None
-            )
-        }) {
+        for secondary_pihole in self
+            .secondary_piholes
+            .iter()
+            .filter(|secondary| secondary.config.sync_mode() == SyncMode::Teleporter)
+        {
             if let Err(e) = upload_backup(secondary_pihole, &self.backup_path).await {
                 error!(
                     "Failed to upload backup to {}: {:?}",
@@ -458,26 +478,14 @@ impl SyncContext {
 }
 
 pub(super) fn determine_sync_modes(secondary_piholes: &[PiHoleClient]) -> SyncModes {
-    let teleporter = secondary_piholes.iter().any(|secondary| {
-        matches!(
-            secondary.config.sync_mode,
-            Some(SyncMode::Teleporter) | None
-        )
-    });
+    let teleporter = secondary_piholes
+        .iter()
+        .any(|secondary| secondary.config.sync_mode() == SyncMode::Teleporter);
     let api = secondary_piholes
         .iter()
-        .any(|secondary| matches!(secondary.config.sync_mode, Some(SyncMode::Api)));
+        .any(|secondary| secondary.config.sync_mode() == SyncMode::Api);
 
     SyncModes { teleporter, api }
-}
-
-fn teleporter_backup_hash(bytes: &[u8]) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::Hasher;
-
-    let mut hasher = DefaultHasher::new();
-    hasher.write(bytes);
-    hasher.finish()
 }
 
 fn build_group_lookup(groups: &[Group]) -> HashMap<u32, String> {

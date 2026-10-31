@@ -130,3 +130,59 @@ impl ConfigFilter {
         filtered_arr
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn run(mode: FilterMode, keys: &[&str], input: Value) -> Value {
+        let keys: Vec<String> = keys.iter().map(|k| k.to_string()).collect();
+        ConfigFilter::new(&keys, mode).filter_json(input)
+    }
+
+    #[test]
+    fn include_nested_key_keeps_only_that_branch() {
+        let input =
+            json!({"dns": {"upstreams": ["1.1.1.1"], "hosts": []}, "webserver": {"port": 80}});
+        let out = run(FilterMode::OptIn, &["dns.upstreams"], input);
+        assert_eq!(out, json!({"dns": {"upstreams": ["1.1.1.1"]}}));
+    }
+
+    #[test]
+    fn include_empty_keys_yields_empty_object() {
+        let out = run(FilterMode::OptIn, &[], json!({"dns": {"a": 1}}));
+        assert_eq!(out, json!({}));
+    }
+
+    #[test]
+    fn exclude_nested_key_keeps_siblings() {
+        let input = json!({"dns": {"upstreams": ["1.1.1.1"], "hosts": ["h"]}, "x": 1});
+        let out = run(FilterMode::OptOut, &["dns.upstreams"], input);
+        assert_eq!(out, json!({"dns": {"hosts": ["h"]}, "x": 1}));
+    }
+
+    #[test]
+    fn exclude_empty_keys_is_unchanged() {
+        let input = json!({"dns": {"a": 1}});
+        assert_eq!(run(FilterMode::OptOut, &[], input.clone()), input);
+    }
+
+    #[test]
+    fn include_array_key_keeps_whole_array() {
+        let input = json!({"dns": {"hosts": ["a", "b", {"k": 1}], "other": 1}});
+        let out = run(FilterMode::OptIn, &["dns.hosts"], input);
+        assert_eq!(out, json!({"dns": {"hosts": ["a", "b", {"k": 1}]}}));
+    }
+
+    #[test]
+    fn include_does_not_match_sibling_with_shared_prefix() {
+        let input = json!({"dns": {"a": 1}, "dnsmasq_lines": ["x"]});
+        let out = run(FilterMode::OptIn, &["dns"], input);
+        assert_eq!(out, json!({"dns": {"a": 1}}));
+
+        let input = json!({"dns": {"hosts": ["h"], "hostRecord": "r"}});
+        let out = run(FilterMode::OptIn, &["dns.hosts"], input);
+        assert_eq!(out, json!({"dns": {"hosts": ["h"]}}));
+    }
+}

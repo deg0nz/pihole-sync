@@ -3,9 +3,10 @@ sync:
   trigger_mode: interval
   # Interval in minutes between sync operations (also default poll interval for watch_config_api)
   interval: 60
-  # Poll interval in minutes for watch_config_api (falls back to interval when omitted)
+  # Poll interval in minutes for watch_config_api (falls back to interval when omitted).
+  # Each poll fetches config, groups, lists, domains and clients from main; a sync runs only when they changed.
   api_poll_interval: 5
-  # Pi-hole config path to watch when trigger_mode is watch_config_file
+  # Pi-hole config path to watch when trigger_mode is watch_config_file (gravity.db in the same directory is watched too)
   config_path: /etc/pihole/pihole.toml
   # Time to wait (seconds) for Pi-hole API to become reachable again after a trigger before running sync
   trigger_api_readiness_timeout_secs: 60
@@ -18,6 +19,8 @@ main:
   schema: https
   port: 443
   api_key: YOUR_MAIN_PIHOLE_APP_PASSWORD
+  # Set to true for self-signed certificates (disables TLS verification; default false)
+  # accept_invalid_certs: true
 
 # Secondary Pi-hole instances (targets)
 secondary:
@@ -25,6 +28,7 @@ secondary:
     schema: https
     port: 443
     api_key: YOUR_SECONDARY_PIHOLE_APP_PASSWORD
+    # accept_invalid_certs: true  # for self-signed certificates (default false)
     update_gravity: true
     # Select sync mechanism (mutually exclusive per secondary)
     # - teleporter: sync via Pi-hole teleporter endpoint (/teleporter)
@@ -50,6 +54,7 @@ secondary:
     schema: https
     port: 443
     api_key: YOUR_SECONDARY_PIHOLE_APP_PASSWORD
+    # accept_invalid_certs: true  # for self-signed certificates (default false)
     update_gravity: true
     sync_mode: teleporter
     # Sync includes as described in https://ftl.pi-hole.net/master/docs/#post-/teleporter
