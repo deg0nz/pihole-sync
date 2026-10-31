@@ -268,13 +268,24 @@ impl SyncContext {
     /// change (`date_updated`, `number`, `invalid_domains`, `abp_entries`, `status`).
     async fn main_change_hash(&self) -> Result<u64> {
         let main = &self.main_pihole;
-        hash_value(&(
-            main.get_config().await?,
-            main.get_groups().await?,
-            main.get_lists().await?,
-            main.get_domains().await?,
-            main.get_clients().await?,
-        ))
+        let hash = async {
+            hash_value(&(
+                main.get_config().await?,
+                main.get_groups().await?,
+                main.get_lists().await?,
+                main.get_domains().await?,
+                main.get_clients().await?,
+            ))
+        }
+        .await;
+        // Free the session slot; a triggered sync re-authenticates.
+        if let Err(e) = main.logout().await {
+            warn!(
+                "[{}] Failed to logout from main instance: {:?}",
+                main.config.host, e
+            );
+        }
+        hash
     }
 
     async fn wait_for_api_readiness(&self) -> Result<()> {
