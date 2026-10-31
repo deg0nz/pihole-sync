@@ -113,3 +113,24 @@ pub async fn wait_for_ready(client: &PiHoleClient) -> Result<()> {
         last_err.map(|e| e.to_string())
     ))
 }
+
+/// Opens a separate raw API session (independent of `PiHoleClient`'s cached one).
+/// Returns the HTTP client, the `/api` base URL and the session id.
+#[allow(dead_code)]
+pub async fn raw_session(config: &InstanceConfig) -> Result<(reqwest::Client, String, String)> {
+    let http = reqwest::Client::new();
+    let base = format!("{}://{}:{}/api", config.schema, config.host, config.port);
+    let res: serde_json::Value = http
+        .post(format!("{base}/auth"))
+        .json(&serde_json::json!({ "password": config.api_key }))
+        .send()
+        .await?
+        .json()
+        .await?;
+    let sid = res
+        .pointer("/session/sid")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("no sid in auth response: {res}"))?
+        .to_string();
+    Ok((http, base, sid))
+}
