@@ -329,4 +329,47 @@ secondary:
         fs::write(&path, yaml).unwrap();
         assert!(Config::load(&path).is_err());
     }
+
+    fn secondary(yaml_extra: &str) -> InstanceConfig {
+        serde_yaml::from_str(&format!(
+            "host: s\nschema: http\nport: 80\napi_key: k\n{yaml_extra}"
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn resolve_secondary_validates_mode_and_options() {
+        // sync_mode: api without options would silently sync nothing.
+        assert!(resolve_secondary(&mut secondary("sync_mode: api")).is_err());
+        // Contradicting options must not silently pick one mode.
+        let mut both = secondary("sync_mode: teleporter\napi_sync_options: {sync_lists: true}");
+        assert!(resolve_secondary(&mut both).is_err());
+
+        let mut implicit_api =
+            secondary("api_sync_options: {sync_config: {filter_keys: [dns.hosts]}}");
+        resolve_secondary(&mut implicit_api).unwrap();
+        assert_eq!(implicit_api.sync_mode(), SyncMode::Api);
+        let mode = implicit_api
+            .api_sync_options
+            .unwrap()
+            .sync_config
+            .unwrap()
+            .mode;
+        assert_eq!(mode, Some(ConfigApiSyncMode::Include));
+
+        let mut teleporter = secondary("");
+        resolve_secondary(&mut teleporter).unwrap();
+        assert_eq!(teleporter.sync_mode(), SyncMode::Teleporter);
+        let opts = teleporter.teleporter_sync_options.unwrap();
+        assert!(opts.config && opts.gravity.adlist && opts.gravity.group);
+    }
+
+    #[test]
+    fn rejects_toml_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.TOML");
+        fs::write(&path, "").unwrap();
+        let err = Config::load(&path).unwrap_err().to_string();
+        assert!(err.contains("TOML"), "{err}");
+    }
 }

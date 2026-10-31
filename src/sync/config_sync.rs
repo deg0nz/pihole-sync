@@ -357,4 +357,31 @@ mod tests {
         assert!(filtered.pointer("/webserver/api/max_sessions").is_some());
         assert!(filtered.pointer("/webserver/port").is_some());
     }
+
+    #[test]
+    fn list_sync_needs_groups_and_teleporter_secondaries_need_nothing() {
+        let client = |sync_mode, options: Option<crate::config::ApiSyncOptions>| {
+            PiHoleClient::new(crate::config::InstanceConfig {
+                host: "s".into(),
+                schema: "http".into(),
+                port: 80,
+                api_key: "k".into(),
+                accept_invalid_certs: false,
+                update_gravity: None,
+                sync_mode: Some(sync_mode),
+                api_sync_options: options,
+                teleporter_sync_options: None,
+            })
+            .unwrap()
+        };
+        let lists_only = crate::config::ApiSyncOptions {
+            sync_lists: Some(true),
+            ..Default::default()
+        };
+        // Lists are mapped to secondary groups by name, so the group lookup must be fetched.
+        let needs = determine_api_sync_needs(&[client(SyncMode::Api, Some(lists_only.clone()))]);
+        assert!(needs.lists && needs.groups && !needs.config);
+        let needs = determine_api_sync_needs(&[client(SyncMode::Teleporter, Some(lists_only))]);
+        assert!(!needs.any());
+    }
 }

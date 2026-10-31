@@ -643,6 +643,86 @@ impl PiHoleClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// Minimal fake Pi-hole: answers /auth with a session and every other request with the
+    /// next queued body (HTTP 201). Returns the client and a counter of non-auth requests.
+    async fn fake_pihole(bodies: Vec<Value>) -> (PiHoleClient, Arc<std::sync::Mutex<usize>>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let writes = Arc::new(std::sync::Mutex::new(0));
+        let counter = writes.clone();
+        tokio::spawn(async move {
+            let mut bodies = bodies.into_iter();
+            loop {
+                let (mut sock, _) = listener.accept().await.unwrap();
+                let mut buf = vec![0; 8192];
+                let n = sock.read(&mut buf).await.unwrap();
+                let body = if String::from_utf8_lossy(&buf[..n]).starts_with("POST /api/auth ") {
+                    json!({"session": {"valid": true, "sid": "sid"}})
+                } else {
+                    *counter.lock().unwrap() += 1;
+                    bodies.next().unwrap()
+                };
+                let body = body.to_string();
+                let res = format!("HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body);
+                sock.write_all(res.as_bytes()).await.unwrap();
+            }
+        });
+        let client = PiHoleClient::new(InstanceConfig {
+            host: "127.0.0.1".into(),
+            schema: "http".into(),
+            port,
+            api_key: "k".into(),
+            accept_invalid_certs: false,
+            update_gravity: None,
+            sync_mode: None,
+            api_sync_options: None,
+            teleporter_sync_options: None,
+        })
+        .unwrap();
+        (client, writes)
+    }
+
+    fn processed(error: Option<&str>) -> Value {
+        match error {
+            Some(e) => json!({"processed": {"errors": [{"item": "g", "error": e}], "success": []}}),
+            None => json!({"processed": {"errors": [], "success": [{"item": "g"}]}}),
+        }
+    }
+
+    fn group() -> Group {
+        Group {
+            name: "g".into(),
+            comment: None,
+            enabled: true,
+            id: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn write_retries_database_locked_then_succeeds() {
+        let locked = processed(Some("database is locked"));
+        let (client, writes) = fake_pihole(vec![locked, processed(None)]).await;
+        client.add_group(&group()).await.unwrap();
+        assert_eq!(*writes.lock().unwrap(), 2);
+    }
+
+    #[tokio::test]
+    async fn write_fails_on_other_processed_errors_without_retry() {
+        let (client, writes) = fake_pihole(vec![processed(Some("UNIQUE constraint failed"))]).await;
+        let err = format!("{:#}", client.add_group(&group()).await.unwrap_err());
+        assert!(err.contains("UNIQUE constraint failed"), "{err}");
+        assert_eq!(*writes.lock().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn write_gives_up_after_repeated_database_locked() {
+        let locked = processed(Some("database is locked"));
+        let (client, writes) = fake_pihole(vec![locked.clone(), locked.clone(), locked]).await;
+        assert!(client.add_group(&group()).await.is_err());
+        assert_eq!(*writes.lock().unwrap(), 3);
+    }
 
     #[test]
     fn processed_errors_only_reports_non_empty_error_lists() {
