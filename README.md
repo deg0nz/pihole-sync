@@ -58,10 +58,13 @@ The default config location is `/etc/pihole-sync/config.yaml`; use `--config /pa
 - TLS certificates are verified by default. For self-signed Pi-hole certificates set `accept_invalid_certs: true` per instance (or `--accept-invalid-certs` with `instances add`). Breaking change: existing self-signed setups must set this.
 - Per secondary, choose a sync mechanism using `sync_mode`:
   - `teleporter` uses `/teleporter`
+    - The backup is only re-imported when its contents changed since the last run (archive timestamps are ignored).
   - `api` uses Pi-hole API endpoints (`/config`, `/groups`, `/lists`). Configure via `api_sync_options`:
     - `sync_config` (optional): filters for `/config`
       - `mode: include` (default) — only listed `filter_keys` are synced; empty list syncs nothing.
       - `mode: exclude` — everything is synced except the listed `filter_keys`; empty list syncs everything.
+      - With an app password, Pi-hole only lets the session change config if `webserver.api.app_sudo = true` is set on each secondary.
+      - The secondary's own `webserver.api` credentials (`password`, `pwhash`, `app_pwhash`, `app_sudo`, `totp_secret`) are never overwritten.
     - `sync_groups` (bool, optional): sync group definitions; groups missing on main are removed from the secondary (except the default group 0)
     - `sync_lists` (bool, optional): sync allow/block lists; lists missing on main are removed from the secondary; if `sync_groups` is false/omitted, lists are assigned to group 0 and a warning is logged when the main Pi-hole uses other groups.
   - Breaking change: the deprecated names `config_sync`, `config_api_sync_options`, `teleporter_options`, `import_options`, `sync_mode: config_api` and `api_sync_options.config` have been removed in this version. Use `api_sync_options.sync_config`, `teleporter_sync_options` and `sync_mode: api` instead; configs containing these (or any other unknown) fields are rejected on load and must be migrated.
