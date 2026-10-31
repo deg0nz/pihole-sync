@@ -238,6 +238,13 @@ impl Config {
         let mut config: Config = serde_yaml::from_str(&content)
             .with_context(|| "Failed to parse config file as YAML (unknown or removed fields such as config_api_sync_options must be migrated, see the README)")?;
 
+        if config.sync.interval == 0 {
+            anyhow::bail!("sync.interval must be at least 1 (minutes)");
+        }
+        if config.sync.api_poll_interval == Some(0) {
+            anyhow::bail!("sync.api_poll_interval must be at least 1 (minutes)");
+        }
+
         for secondary in &mut config.secondary {
             resolve_secondary(secondary)?;
         }
@@ -371,5 +378,22 @@ secondary:
         fs::write(&path, "").unwrap();
         let err = Config::load(&path).unwrap_err().to_string();
         assert!(err.contains("TOML"), "{err}");
+    }
+
+    #[test]
+    fn rejects_zero_intervals() {
+        for (extra, msg) in [
+            ("interval: 0", "sync.interval"),
+            ("api_poll_interval: 0", "sync.api_poll_interval"),
+        ] {
+            let yaml = format!(
+                "sync:\n  cache_location: /tmp/c\n  {extra}\nmain:\n  host: m\n  schema: https\n  port: 443\n  api_key: k\nsecondary: []\n"
+            );
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("config.yaml");
+            fs::write(&path, yaml).unwrap();
+            let err = Config::load(&path).unwrap_err().to_string();
+            assert!(err.contains(msg) && err.contains("at least 1"), "{err}");
+        }
     }
 }
