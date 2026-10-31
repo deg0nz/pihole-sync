@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
 use tokio::time::sleep;
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::pihole::client::{Group, List, PiHoleClient};
 use crate::sync::util::API_WRITE_THROTTLE;
@@ -158,6 +158,11 @@ pub async fn sync_lists(
     }
 
     for orphan in orphan_lists(main_lists, secondary_lists) {
+        let (host, port) = secondary.instance_label();
+        info!(
+            "[{host}:{port}] Removing list '{}' ({}) (not present on main)",
+            orphan.address, orphan.list_type
+        );
         secondary
             .delete_list(&orphan.address, &orphan.list_type)
             .await?;

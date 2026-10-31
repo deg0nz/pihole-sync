@@ -121,7 +121,7 @@ impl PiHoleClient {
         })
     }
 
-    fn instance_label(&self) -> (&str, u16) {
+    pub(crate) fn instance_label(&self) -> (&str, u16) {
         (&self.config.host, self.config.port)
     }
 

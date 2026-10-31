@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
 use tokio::time::sleep;
+use tracing::info;
 
 use crate::pihole::client::{Group, PiHoleClient};
 use crate::sync::util::API_WRITE_THROTTLE;
@@ -54,6 +55,11 @@ pub async fn sync_groups(
     }
 
     for orphan in orphan_groups(main_groups, secondary_groups) {
+        let (host, port) = secondary.instance_label();
+        info!(
+            "[{host}:{port}] Removing group '{}' (not present on main)",
+            orphan.name
+        );
         secondary.delete_group(&orphan.name).await?;
         sleep(API_WRITE_THROTTLE).await;
     }
